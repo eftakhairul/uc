@@ -1,159 +1,281 @@
-# `uc` Technical Documentation
+# `uc` How-To Guide
 
-## Overview
+`uc` is a single command that dispatches to your personal collection of scripts,
+aliases, and shell functions. Register something once, then run it from anywhere.
 
-`uc` is a personal command dispatcher written in Go. It lets you register scripts,
-aliases, and shell functions, then invoke them by name from anywhere. The project
-is published as a standalone CLI binary and distributed via GitHub Releases,
-Homebrew, and `go install`.
+## Table of Contents
 
-## Repository Layout
+1. [Installation](#installation)
+2. [Scripts](#scripts)
+3. [Aliases](#aliases)
+4. [Functions](#functions)
+5. [The Interactive Picker](#the-interactive-picker)
+6. [Tab Completion](#tab-completion)
+7. [History](#history)
+8. [Listing and Inspecting](#listing-and-inspecting)
+9. [Editing](#editing)
+10. [Removing](#removing)
+11. [Configuration](#configuration)
 
-```
-.
-├── cmd/uc                  # Application entry point
-├── internal/
-│   ├── aliases             # JSON-backed alias store
-│   ├── commands            # CLI subcommand handlers
-│   ├── completion          # Shell completion engine
-│   ├── executor            # Process replacement (execve / bash -c)
-│   ├── functions           # JSON-backed function store
-│   ├── history             # Invocation history store
-│   ├── picker              # Interactive fuzzy picker
-│   ├── ranker              # Frecency ranking
-│   ├── registry            # Three-tier name resolution
-│   └── help                # Static and metadata-driven help
-├── e2e                     # Containerized end-to-end tests
-├── .github/workflows/      # CI/CD workflows
-├── .goreleaser.yml         # Release configuration
-├── Makefile                # Local development tasks
-├── README.md               # User-facing documentation
-├── CHANGELOG.md            # Release notes
-└── docs/doc.md             # This document
+## Installation
+
+### macOS / Linux via Homebrew
+
+```sh
+brew install eftakhairul/uc/uc
 ```
 
-## Module
+### Via Go
 
+```sh
+go install github.com/eftakhairul/uc/cmd/uc@latest
 ```
-github.com/eftakhairul/uc
+
+### Prebuilt binaries
+
+Download the archive for your platform from the
+[GitHub Releases](https://github.com/eftakhairul/uc/releases) page, extract it,
+and place `uc` on your `$PATH`.
+
+### Shell setup
+
+Add completion to your shell:
+
+```sh
+# Bash
+	eval "$(uc completion bash)"
+
+# Zsh
+	eval "$(uc completion zsh)"
 ```
 
-Built with Go 1.26.4. The module path matches the GitHub repository, so `go install`
-works out of the box.
+## Scripts
 
-## Core Concepts
+Register any executable script with a shebang or one of these extensions: `.sh`,
+`.py`, `.js`, `.rb`, `.pl`. `uc` copies it into `~/.uc/scripts/` and runs it via
+process replacement (`execve`), so stdin/stdout, signals, and exit codes work
+exactly as if you ran it directly.
 
-### Three-tier name resolution
+### Add a script
 
-When you run `uc <name>`, the name resolves in this fixed order:
+```sh
+uc add ~/scripts/killport.sh killport
+# added /Users/you/scripts/killport.sh -> /Users/you/.uc/scripts/killport
+```
 
-1. **Script** — executable file in `~/.uc/scripts/`
-2. **Alias** — command text stored in `$XDG_CONFIG_HOME/uc/aliases.json`
-3. **Function** — inline shell snippet stored in `$XDG_CONFIG_HOME/uc/functions.json`
+### Run a script
 
-`uc which <name>` reports the resolved kind and source.
+```sh
+uc killport 8080
+```
 
-### Execution model
+### Helpful metadata tags
 
-Scripts are run with `execve` process replacement, preserving stdin/stdout,
-signal handling, and exit codes. Aliases and functions run through `bash -c`.
-
-### Metadata tags
-
-Scripts can include structured comments in the first 25 lines:
+Add these comments in the first 25 lines of a script:
 
 ```sh
 #!/bin/bash
-# @desc: short description
-# @usage: mycmd <arg>
-# @example: mycmd foo
-# @example: mycmd bar
+# @desc: kills whatever is listening on a port
+# @usage: killport <port>
+# @example: killport 8080
+# @example: killport 3000 --force
 ```
 
-These tags feed `uc list`, the picker, and `uc help <name>`.
+These populate `uc list`, the interactive picker, and `uc help killport`.
 
-### Frecency
+## Aliases
 
-The picker and completions rank names by a frequency/recency score. Weights:
+Aliases are shortcuts for arbitrary shell command text, like bash aliases but
+scoped to `uc`.
 
-| Last used | Multiplier |
-|-----------|------------|
-| < 1 hour  | 4×         |
-| < 1 day   | 3×         |
-| < 1 week  | 2×         |
-| older     | 1×         |
-
-## Development
-
-Local build:
+### Add an alias
 
 ```sh
-make build      # current platform -> dist/uc
-make build-mac  # universal macOS binary
-make test
-make vet
-make fmt
-make clean
+uc alias add gs git status
+# added alias gs -> git status
+
+uc gs -s
+# runs: git status -s
 ```
 
-Version is baked in at build time with `-ldflags` and falls back to `dev` when
-no git tag is present.
+Args you pass are appended at the end, just like bash alias expansion.
 
-## Release Process
+### Alias with a pipeline
 
-Releases are fully automated via GoReleaser.
+If the command contains shell characters, quote the whole thing:
 
-### Trigger a release
+```sh
+uc alias add ll 'ls -la | less'
+```
 
-1. Update `CHANGELOG.md`.
-2. Create and push a tag:
-   ```sh
-   git tag v0.1.0
-   git push origin v0.1.0
-   ```
-3. Go to **Actions → release → Run workflow**, enter the tag, and dispatch.
+### Alias that calls another `uc` name
 
-### What GoReleaser does
+```sh
+uc alias add dp 'uc deploy --env=production'
+```
 
-- Builds cross-platform binaries:
-  - macOS: `amd64`, `arm64`
-  - Linux: `amd64`, `arm64`
-  - Windows: `amd64`
-- Produces `tar.gz` archives (`.zip` for Windows)
-- Generates a checksum file
-- Creates a GitHub Release with a categorized changelog
-- Pushes an updated Homebrew formula to `github.com/eftakhairul/homebrew-uc`
+### Add a description
 
-### Required secrets
+```sh
+uc alias add gs git status --desc "short git status"
+```
 
-| Secret | Used for |
-|--------|----------|
-| `GITHUB_TOKEN` | Created automatically by GitHub Actions; creates release and uploads assets |
-| `HOMEBREW_TAP_TOKEN` | Personal access token with `repo` and `workflow` scopes; updates the Homebrew tap |
+## Functions
 
-## Distribution Channels
+Functions are inline shell snippets that chain commands together.
 
-| Channel | Install command |
-|---------|-----------------|
-| Homebrew | `brew install eftakhairul/uc/uc` |
-| Go | `go install github.com/eftakhairul/uc/cmd/uc@latest` |
-| GitHub Releases | Download archive from the releases page |
-| Source | `make install` |
+### Add a function
+
+```sh
+uc function add shiplt 'uc build && uc test && uc deploy --env=production'
+# added function shiplt
+```
+
+Run it like any other name:
+
+```sh
+uc shiplt
+```
+
+Function bodies run via `bash -c`, and `$1`, `$2`, `$@` inside the body map to
+whatever args you pass to `uc shiplt`.
+
+### Function with arguments
+
+```sh
+uc function add greet 'echo "Hello, $1"'
+uc greet Alice
+# Hello, Alice
+```
+
+## The Interactive Picker
+
+Run `uc` with no arguments to open a fuzzy list of all registered names:
+
+```sh
+uc
+```
+
+- Type to filter by name or description.
+- Use `↑`/`↓` or `Ctrl-p`/`Ctrl-n` to move.
+- Press `Enter` to select; you get an editable arg line pre-filled with the name.
+- Press `Enter` again to run, or `Esc`/`Ctrl-c` to cancel.
+
+Names are ranked by **frecency** — a combination of how often and how recently
+they were used.
+
+## Tab Completion
+
+`uc completion bash|zsh` emits a completion script. After loading it, tab
+completion lists your registered names, ranked by frecency rather than
+alphabetically.
+
+```sh
+uc kil<TAB>
+# killport
+```
+
+## History
+
+Every script, alias, and function run is logged.
+
+### Show history
+
+```sh
+uc history       # last 25 entries
+uc history 10    # last 10 entries
+```
+
+### Replay a history entry
+
+```sh
+uc history
+# 1  killport 8080
+
+uc history run 1
+# runs killport 8080
+```
+
+`uc history run` re-resolves the name at replay time, so edits to aliases or
+functions are picked up automatically.
+
+## Listing and Inspecting
+
+### List everything
+
+```sh
+uc list
+# killport  script  kills whatever is listening on a port
+# gs        alias   short git status
+# shiplt    function  build, test, deploy
+```
+
+`uc ls` is a shorter alias for `uc list`.
+
+### Find what a name resolves to
+
+```sh
+uc which killport
+# script: /Users/you/.uc/scripts/killport
+```
+
+### Show help for a name
+
+```sh
+uc help killport
+```
+
+Or use the shortcut when `--help` is the only argument:
+
+```sh
+uc killport --help
+```
+
+## Editing
+
+### Edit a script
+
+```sh
+uc edit killport
+```
+
+Opens the script in `$EDITOR`.
+
+### Edit an alias or function
+
+```sh
+uc edit gs
+uc edit shiplt
+```
+
+`uc` writes the current value to a temp file, opens it in `$EDITOR`, and saves
+it back. A non-zero editor exit aborts the change.
+
+## Removing
+
+### Remove a script, alias, or function
+
+```sh
+uc remove killport
+uc rm gs
+uc rm shiplt
+```
 
 ## Configuration
 
-User configuration is optional. When present, it lives at:
+`uc` works without any configuration file. If you want to customize behavior,
+create:
 
 ```
 $XDG_CONFIG_HOME/uc/settings.json
 ```
 
-Default structure:
+Example:
 
 ```json
 {
-  "editor": null,
-  "history_size": 25,
+  "editor": "vim",
+  "history_size": 50,
   "completion": { "enabled": true },
   "frecency": {
     "recency_weights": { "hour": 4, "day": 3, "week": 2, "older": 1 }
@@ -161,31 +283,4 @@ Default structure:
 }
 ```
 
-Unknown keys are ignored for forward compatibility.
-
-## Data Layout
-
-```
-$XDG_CONFIG_HOME/uc/
-├── settings.json    # optional user config
-├── aliases.json     # alias registry
-└── functions.json   # function registry
-
-$UC_HOME/           # defaults to ~/.uc
-├── scripts/        # registered scripts
-└── history.json    # last N invocations
-```
-
-## Testing
-
-- Unit tests: `make test`
-- End-to-end tests: `make test-e2e` (requires Docker)
-
-## CI/CD
-
-- `.github/workflows/release.yml`: `workflow_dispatch`-triggered release pipeline
-- `.goreleaser.yml`: cross-platform build, archive, release, and tap update
-
-## License
-
-MIT. See `LICENSE`.
+Unknown keys are ignored so older config files keep working across upgrades.
