@@ -12,6 +12,26 @@ that thing you wrote six months ago.
 
 ## Install
 
+### macOS / Linux via Homebrew
+
+```sh
+brew install eftakhairul/uc/uc
+```
+
+### Via Go
+
+```sh
+go install github.com/eftakhairul/uc/cmd/uc@latest
+```
+
+### Prebuilt binaries
+
+Download the archive for your platform from the
+[GitHub Releases](https://github.com/eftakhairul/uc/releases) page, extract it,
+and place the `uc` binary on your `$PATH`.
+
+### From source
+
 ```sh
 make install
 ```
@@ -225,6 +245,18 @@ automatically — it's only read if you put one there yourself:
 
 Unknown keys are ignored, so old config files keep working across
 upgrades. Unset keys fall back to the defaults above.
+
+## Releasing
+
+1. Make sure `CHANGELOG.md` is up to date.
+2. Create and push a tag:
+   ```sh
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+3. Go to **Actions → release → Run workflow**, enter the tag, and dispatch it.
+   GoReleaser will build cross-platform binaries, create a GitHub Release, and
+   update the Homebrew tap at `github.com/eftakhairul/homebrew-uc`.
 
 ## Development
 

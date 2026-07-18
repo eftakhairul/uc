@@ -1,0 +1,115 @@
+# GoReleaser configuration for github.com/eftakhairul/uc
+# Triggered via .github/workflows/release.yml on workflow_dispatch for a tag.
+
+project_name: uc
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: uc
+    main: ./cmd/uc
+    binary: uc
+    ldflags:
+      - -s -w -X 'github.com/eftakhairul/uc/internal/commands.Version={{.Version}}'
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+
+archives:
+  - id: uc
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - CHANGELOG.md
+      - completion/*
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: Features
+      regexp: '^feat[:\(]'
+      order: 0
+    - title: Bug fixes
+      regexp: '^fix[:\(]'
+      order: 1
+    - title: Other
+      order: 999
+
+release:
+  github:
+    owner: eftakhairul
+    name: uc
+  draft: false
+  prerelease: auto
+  name_template: '{{ .ProjectName }} {{ .Version }}'
+  header: |
+    ## Installation
+
+    ### macOS / Linux via Homebrew
+    ```sh
+    brew install eftakhairul/uc/uc
+    ```
+
+    ### Via Go
+    ```sh
+    go install github.com/eftakhairul/uc/cmd/uc@{{ .Version }}
+    ```
+
+    ### Prebuilt binaries
+    Download the archive for your platform from the assets below, extract it, and place `uc` on your `$PATH`.
+
+brews:
+  - name: uc
+    repository:
+      owner: eftakhairul
+      name: homebrew-uc
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    url_template: "https://github.com/eftakhairul/uc/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    commit_author:
+      name: goreleaserbot
+      email: goreleaser@eftakhairul.com
+    commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Version }}"
+    directory: Formula
+    homepage: "https://github.com/eftakhairul/uc"
+    description: "Single command that dispatches to your personal collection of scripts"
+    license: "MIT"
+    test: |
+      system "#{bin}/uc version"
+    install: |
+      bin.install "uc"
