@@ -75,7 +75,8 @@ always tells you which kind you got.
 | Command | What it does |
 |---|---|
 | `uc <name> [args...]` | Run a registered script, alias, or function |
-| `uc` *(no args)* | Launch the interactive fuzzy picker |
+| `uc` *(no args)* | Show usage help |
+| `uc picker` | Launch the interactive fuzzy picker |
 | `uc list` / `uc ls` | List scripts + aliases + functions, with kind and description |
 | `uc add <path> [name]` | Register a script (copies it in, sets +x) |
 | `uc remove <name>` / `uc rm` | Unregister a script, alias, or function |
@@ -178,7 +179,7 @@ aborts the save. Functions always run via `bash -c`, regardless of your
 
 ## Interactive picker
 
-Running `uc` with no arguments opens a fuzzy-filter list of your scripts,
+Running `uc picker` opens a fuzzy-filter list of your scripts,
 aliases, and functions together — each tagged with its kind — ranked by
 frecency (how often and how recently you've used each one):
 

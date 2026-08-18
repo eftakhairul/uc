@@ -150,10 +150,10 @@ uc greet Alice
 
 ## The Interactive Picker
 
-Run `uc` with no arguments to open a fuzzy list of all registered names:
+Run `uc picker` to open a fuzzy list of all registered names:
 
 ```sh
-uc
+uc picker
 ```
 
 - Type to filter by name or description.

@@ -568,7 +568,7 @@ const helpText = `uc - personal CLI script dispatcher
 
 Usage:
   uc <name> [args...]     Run a registered script, alias, or function
-  uc                      Launch the interactive picker
+  uc                      Show this help
 
 Management commands:
   uc list, uc ls          List registered scripts, aliases, and functions
@@ -576,6 +576,7 @@ Management commands:
   uc remove <name>, rm    Unregister a script, alias, or function
   uc which <name>         Print what a name resolves to, and its kind
   uc edit <name>          Open a script, alias, or function in $EDITOR
+  uc picker               Launch the interactive fuzzy picker
   uc completion <shell>   Print a completion script (bash|zsh)
   uc history [n]          Show the last n invocations (default: history_size)
   uc history run <n>      Re-run the nth history entry

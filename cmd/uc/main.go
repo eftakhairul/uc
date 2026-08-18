@@ -24,7 +24,7 @@ func main() {
 	args := os.Args[1:]
 
 	if len(args) == 0 {
-		if err := picker.Run(cfg, r); err != nil {
+		if err := r.Help(""); err != nil {
 			fmt.Fprintf(os.Stderr, "uc: %v\n", err)
 			os.Exit(1)
 		}
@@ -49,6 +49,8 @@ func main() {
 		cmdErr = runCompletion(r, rest)
 	case "history":
 		cmdErr = runHistory(r, rest)
+	case "picker":
+		cmdErr = picker.Run(cfg, r)
 	case "alias":
 		cmdErr = runAlias(r, rest)
 	case "function":

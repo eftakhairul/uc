@@ -50,6 +50,13 @@ Scripts: opens the file in $EDITOR. Aliases and functions: temp-file
 round-trip of the command/body through $EDITOR (same as 'uc alias edit' /
 'uc function edit').
 `,
+	"picker": `uc picker
+
+Launch the interactive fuzzy-filter picker over every registered script,
+alias, and function, ranked by frecency. Type to filter, arrows to move
+the selection, Enter to pick (then edit args), Enter again to run,
+Esc/Ctrl-c to exit without running anything.
+`,
 	"completion": `uc completion <bash|zsh>
 
 Print a shell completion script to stdout, for 'eval "$(uc completion bash)"'.

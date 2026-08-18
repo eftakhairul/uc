@@ -14,6 +14,7 @@ var Names = []string{
 	"remove", "rm",
 	"which",
 	"edit",
+	"picker",
 	"completion",
 	"history",
 	"alias",
