@@ -160,6 +160,28 @@ func TestReservedNameRejection(t *testing.T) {
 	assert.Contains(t, out, "reserved", "add history.sh output")
 }
 
+func TestAddGuards(t *testing.T) {
+	env := sandbox(t)
+	writeFile(t, "/tmp/guard.sh", "#!/bin/sh\necho one\n")
+
+	out, code := runUC(t, env, "add", "/tmp/guard.sh", "guard")
+	require.Equalf(t, 0, code, "add: output:\n%s", out)
+
+	// Same name again: rejected instead of silently overwritten.
+	out, code = runUC(t, env, "add", "/tmp/guard.sh", "guard")
+	assert.Equalf(t, 1, code, "duplicate add: output:\n%s", out)
+	assert.Contains(t, out, "already exists", "duplicate add output")
+
+	// --force keeps the deliberate re-add workflow working.
+	out, code = runUC(t, env, "add", "/tmp/guard.sh", "guard", "--force")
+	assert.Equalf(t, 0, code, "force add: output:\n%s", out)
+
+	// Traversal names must not escape the scripts directory.
+	out, code = runUC(t, env, "add", "/tmp/guard.sh", "../evil")
+	assert.Equalf(t, 1, code, "traversal add: output:\n%s", out)
+	assert.Contains(t, out, "invalid script name", "traversal add output")
+}
+
 func TestShadowWarning(t *testing.T) {
 	env := sandbox(t)
 

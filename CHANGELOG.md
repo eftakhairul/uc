@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `uc add` no longer writes outside the scripts directory: names containing
+  path separators or `..` are rejected. It also refuses to silently
+  overwrite an existing script or create a cross-extension ambiguity —
+  pass `--force` to overwrite deliberately.
 - Windows binaries now actually run commands: Go's Windows `syscall.Exec` is
   an unsupported stub (always `EWINDOWS`), so every `uc <name>` invocation
   failed at runtime. On Windows uc now spawns the command with inherited

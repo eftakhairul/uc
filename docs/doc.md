@@ -63,6 +63,14 @@ uc add ~/scripts/killport.sh killport
 # added /Users/you/scripts/killport.sh -> /Users/you/.uc/scripts/killport
 ```
 
+If the name is already registered (or would be ambiguous with a same-named
+script under another extension), `uc add` refuses rather than silently
+overwriting. Re-register a script deliberately with `--force`:
+
+```sh
+uc add ~/scripts/killport.sh killport --force
+```
+
 ### Run a script
 
 ```sh
