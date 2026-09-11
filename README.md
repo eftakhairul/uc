@@ -83,7 +83,7 @@ always tells you which kind you got.
 | `uc <name> [args...]` | Run a registered script, alias, or function |
 | `uc` *(no args)* | Launch the interactive fuzzy picker |
 | `uc list` / `uc ls` | List scripts + aliases + functions, with kind and description |
-| `uc add <path> [name]` | Register a script (copies it in, sets +x) |
+| `uc add <path> [name] [--force]` | Register a script (copies it in, sets +x). Refuses to overwrite or create an ambiguous name unless `--force` |
 | `uc remove <name>` / `uc rm` | Unregister a script, alias, or function |
 | `uc which <name>` | Print what a name resolves to, and its kind |
 | `uc edit <name>` | Scripts: open in `$EDITOR`. Aliases/functions: temp-file round-trip through `$EDITOR`. |
