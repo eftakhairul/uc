@@ -1,25 +1,51 @@
 // Package executor runs resolved scripts via process replacement
 // (syscall.Exec) so the invoked script inherits the terminal exactly as if
-// it had been run directly (architecture §3.3).
+// it had been run directly (architecture §3.3). Windows has no process
+// replacement — there, exec1 falls back to spawning the child with inherited
+// stdio and mirroring its exit code (see exec_windows.go).
 package executor
 
 import (
+	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
+	"strings"
 )
 
-// interpreters maps a script extension to the interpreter binary that
-// should run it, looked up on $PATH at runtime (architecture §3.3).
-var interpreters = map[string]string{
-	".sh": "bash",
-	".py": "python3",
-	".js": "node",
-	".rb": "ruby",
-	".pl": "perl",
+// interpreters maps a script extension to the interpreter binaries that
+// can run it, tried in order on $PATH at runtime (architecture §3.3).
+// Multiple candidates exist where installations disagree on the binary
+// name: python.org and Microsoft Store installs expose "python", while
+// unix distributions expose "python3".
+var interpreters = map[string][]string{
+	".sh": {"bash"},
+	".py": {"python3", "python"},
+	".js": {"node"},
+	".rb": {"ruby"},
+	".pl": {"perl"},
 }
+
+// lookupInterpreter returns the resolved binary path and the argv[0] name
+// for ext, trying each candidate on $PATH in order, and whether ext has a
+// registered interpreter at all.
+func lookupInterpreter(ext string) (bin, name string, err error) {
+	candidates, ok := interpreters[ext]
+	if !ok {
+		return "", "", errNoInterpreter
+	}
+	for _, c := range candidates {
+		if found, lookErr := exec.LookPath(c); lookErr == nil {
+			return found, c, nil
+		}
+	}
+	return "", "", fmt.Errorf("interpreter for %q not found on PATH (tried %s)",
+		ext, strings.Join(candidates, ", "))
+}
+
+// errNoInterpreter signals that an extension has no registered
+// interpreter, so the script must be executed directly via its shebang.
+var errNoInterpreter = errors.New("no interpreter registered for extension")
 
 // Run replaces the current process image with the script, via its
 // interpreter for known extensions or directly for extensionless scripts
@@ -33,20 +59,20 @@ func Run(path string, args []string) error {
 	var argv0 string
 	var argv []string
 
-	if interp, ok := interpreters[ext]; ok {
-		bin, err := exec.LookPath(interp)
-		if err != nil {
-			return fmt.Errorf("interpreter %q not found on PATH: %w", interp, err)
-		}
+	bin, interp, err := lookupInterpreter(ext)
+	switch {
+	case err == nil:
 		argv0 = bin
 		argv = append([]string{interp, path}, args...)
-	} else {
-		bin, err := exec.LookPath(path)
-		if err != nil {
-			return fmt.Errorf("%s is not executable: %w", path, err)
+	case errors.Is(err, errNoInterpreter):
+		bin, lookErr := exec.LookPath(path)
+		if lookErr != nil {
+			return fmt.Errorf("%s is not executable: %w", path, lookErr)
 		}
 		argv0 = bin
 		argv = append([]string{path}, args...)
+	default:
+		return err
 	}
 
 	return exec1(argv0, argv)
@@ -90,12 +116,4 @@ func ExecReplace(argv []string) error {
 		return fmt.Errorf("%s not found on PATH: %w", argv[0], err)
 	}
 	return exec1(bin, argv)
-}
-
-func exec1(bin string, argv []string) error {
-	env := os.Environ()
-	if err := syscall.Exec(bin, argv, env); err != nil {
-		return fmt.Errorf("exec %s: %w", bin, err)
-	}
-	return nil // unreachable on success
 }

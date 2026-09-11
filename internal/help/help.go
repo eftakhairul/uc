@@ -26,10 +26,12 @@ kind and description (if any), sorted by name.
 Enumerate every registered script, alias, and function together, with its
 kind and description (if any), sorted by name.
 `,
-	"add": `uc add <path> [name]
+	"add": `uc add <path> [name] [--force]
 
 Register a script: copies <path> into $UC_HOME/scripts/<name or
-basename(path)> and sets its executable bit.
+basename(path)> and sets its executable bit. Fails if the name already
+exists or would be ambiguous with another registered script; pass --force
+to overwrite anyway.
 `,
 	"remove": `uc remove <name>, uc rm <name>
 

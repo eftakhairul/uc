@@ -30,6 +30,12 @@ Download the archive for your platform from the
 [GitHub Releases](https://github.com/eftakhairul/uc/releases) page, extract it,
 and place the `uc` binary on your `$PATH`.
 
+On Windows, install [Git for Windows](https://gitforwindows.org/) so `bash`
+is on `PATH` — scripts, aliases, and functions run through it. Windows has no
+process replacement, so uc spawns the command and mirrors its exit code;
+register scripts with an extension (`.sh`, `.py`, ...) since extensionless
+shebang scripts aren't executable there.
+
 ### From source
 
 ```sh
@@ -77,7 +83,7 @@ always tells you which kind you got.
 | `uc <name> [args...]` | Run a registered script, alias, or function |
 | `uc` *(no args)* | Launch the interactive fuzzy picker |
 | `uc list` / `uc ls` | List scripts + aliases + functions, with kind and description |
-| `uc add <path> [name]` | Register a script (copies it in, sets +x) |
+| `uc add <path> [name] [--force]` | Register a script (copies it in, sets +x). Refuses to overwrite or create an ambiguous name unless `--force` |
 | `uc remove <name>` / `uc rm` | Unregister a script, alias, or function |
 | `uc which <name>` | Print what a name resolves to, and its kind |
 | `uc edit <name>` | Scripts: open in `$EDITOR`. Aliases/functions: temp-file round-trip through `$EDITOR`. |
@@ -105,7 +111,8 @@ win over a script/alias/function of the same name, so `uc add`,
 
 Any language works, as long as it's either executable with its own shebang
 or has one of these extensions: `.sh`, `.py`, `.js`, `.rb`, `.pl`. `uc`
-looks up the right interpreter on `$PATH` at runtime.
+looks up the right interpreter on `$PATH` at runtime — for `.py` it tries
+`python3` first, then `python`, so Windows and minimal images work too.
 
 Add metadata tags that show up in `uc list`, the picker, and `uc help
 <name>`:
@@ -271,8 +278,9 @@ make clean
 
 `uc version` reports `git describe --tags` (e.g. `v0.2.0` or
 `v0.2.0-3-gabc1234-dirty`), baked in at build time via `-ldflags`. Without
-a git repo or tags, it falls back to `dev`. Tag a release with
-`git tag v0.1.0` before building to get a real version string.
+tags it falls back to the commit hash, and to `dev` when built outside a
+git repo. Tag a release with `git tag v0.1.0` before building to get a real
+version string.
 
 Module boundaries mirror the architecture doc (`uc-ARCHITECTURE.md`):
 `registry` (three-tier name resolution + metadata tags), `aliases` +
