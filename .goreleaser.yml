@@ -45,7 +45,6 @@ archives:
       - README.md
       - LICENSE
       - CHANGELOG.md
-      - completion/*
 
 checksum:
   name_template: 'checksums.txt'

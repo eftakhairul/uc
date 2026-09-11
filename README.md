@@ -30,6 +30,12 @@ Download the archive for your platform from the
 [GitHub Releases](https://github.com/eftakhairul/uc/releases) page, extract it,
 and place the `uc` binary on your `$PATH`.
 
+On Windows, install [Git for Windows](https://gitforwindows.org/) so `bash`
+is on `PATH` — scripts, aliases, and functions run through it. Windows has no
+process replacement, so uc spawns the command and mirrors its exit code;
+register scripts with an extension (`.sh`, `.py`, ...) since extensionless
+shebang scripts aren't executable there.
+
 ### From source
 
 ```sh

@@ -9,6 +9,7 @@ import (
 func TestLoad_Defaults(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir reads USERPROFILE on Windows
 	t.Setenv("UC_HOME", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 
@@ -33,6 +34,7 @@ func TestLoad_Defaults(t *testing.T) {
 func TestLoad_UCHomeOverride(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	custom := filepath.Join(home, "custom-uc")
 	t.Setenv("UC_HOME", custom)
 
@@ -51,6 +53,7 @@ func TestLoad_UCHomeOverride(t *testing.T) {
 func TestLoad_PartialSettingsFileMergesOntoDefaults(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("UC_HOME", "")
 	xdg := filepath.Join(home, "xdgconfig")
 	t.Setenv("XDG_CONFIG_HOME", xdg)
@@ -80,6 +83,7 @@ func TestLoad_PartialSettingsFileMergesOntoDefaults(t *testing.T) {
 func TestLoad_NoSettingsFileDoesNotCreateOne(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("UC_HOME", "")
 	xdg := filepath.Join(home, "xdgconfig")
 	t.Setenv("XDG_CONFIG_HOME", xdg)
