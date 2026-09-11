@@ -38,6 +38,38 @@ jobs:
       - name: Test
         run: make test
 
+  windows:
+    name: Windows tests
+    # Native Windows job: unit tests (including the exec_windows.go
+    # spawn-and-wait fallback) plus the Windows e2e suite, which drives the
+    # compiled uc.exe through Git Bash (preinstalled on windows runners).
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: E2E tests
+        # shell: bash puts Git Bash's /usr/bin at the front of PATH for the
+        # whole test process tree, so uc's LookPath("bash") finds Git Bash
+        # rather than the WSL stub at C:\Windows\System32\bash.exe.
+        shell: bash
+        run: go test -tags e2e ./e2e/...
+
   e2e:
     name: E2E tests
     # Only on PRs (against the compiled binary, in a Docker container via

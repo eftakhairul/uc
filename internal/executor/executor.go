@@ -1,14 +1,14 @@
 // Package executor runs resolved scripts via process replacement
 // (syscall.Exec) so the invoked script inherits the terminal exactly as if
-// it had been run directly (architecture §3.3).
+// it had been run directly (architecture §3.3). Windows has no process
+// replacement — there, exec1 falls back to spawning the child with inherited
+// stdio and mirroring its exit code (see exec_windows.go).
 package executor
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 )
 
 // interpreters maps a script extension to the interpreter binary that
@@ -90,12 +90,4 @@ func ExecReplace(argv []string) error {
 		return fmt.Errorf("%s not found on PATH: %w", argv[0], err)
 	}
 	return exec1(bin, argv)
-}
-
-func exec1(bin string, argv []string) error {
-	env := os.Environ()
-	if err := syscall.Exec(bin, argv, env); err != nil {
-		return fmt.Errorf("exec %s: %w", bin, err)
-	}
-	return nil // unreachable on success
 }
