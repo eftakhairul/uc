@@ -2,6 +2,7 @@ package aliases
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -71,6 +72,53 @@ func TestNames_Sorted(t *testing.T) {
 	for i, n := range names {
 		if n != want[i] {
 			t.Errorf("names[%d] = %q, want %q", i, n, want[i])
+		}
+	}
+}
+
+func TestAppendHazard(t *testing.T) {
+	cases := []struct {
+		command string
+		want    string // substring, "" = no hazard
+	}{
+		// Clean commands: the args append cleanly at the end.
+		{"git status", ""},
+		{"ls -la | less", ""},
+		{"echo hi && echo bye", ""},
+		{"", ""},
+		// Comments swallow the appended args.
+		{"echo hi # my note", "comment"},
+		{"# just a note", "comment"},
+		{"echo hi #note", "comment"},
+		// A # inside quotes is literal text, not a comment.
+		{`echo "#not a comment"`, ""},
+		{"echo '# also not one'", ""},
+		{"grep '#' file", ""},
+		// Trailing control operators detach the appended args.
+		{"long-task &", "separate command"},
+		{"setup;", "separate command"},
+		{"a && b &&", "separate command"},
+		{"a || b ||", "separate command"},
+		{"cat file |", "command on the right"},
+		{"  trailing-space &  ", "separate command"},
+		// An operator character inside an unclosed quote is literal.
+		{`echo "tom & jerry`, ""},
+	}
+
+	for _, c := range cases {
+		got := AppendHazard(c.command)
+		if c.want == "" {
+			if got != "" {
+				t.Errorf("AppendHazard(%q) = %q, want no hazard", c.command, got)
+			}
+			continue
+		}
+		if got == "" {
+			t.Errorf("AppendHazard(%q) = \"\", want a hazard mentioning %q", c.command, c.want)
+			continue
+		}
+		if !strings.Contains(got, c.want) {
+			t.Errorf("AppendHazard(%q) = %q, want it to mention %q", c.command, got, c.want)
 		}
 	}
 }

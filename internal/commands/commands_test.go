@@ -162,3 +162,24 @@ func TestAddDerivedNameAndOutput(t *testing.T) {
 		t.Errorf("resolved kind = %q, want script", resolved.Kind)
 	}
 }
+
+// A hazardous alias command is still registered — the note is advisory and
+// belongs on stderr, so stdout stays clean for scripting.
+func TestAliasAddHazardWarnsWithoutFailing(t *testing.T) {
+	r, out := newTestRunner(t)
+
+	if err := r.AliasAdd("noted", "echo hi # my note", ""); err != nil {
+		t.Fatalf("AliasAdd: %v", err)
+	}
+	if strings.Contains(out.String(), "note:") {
+		t.Errorf("stdout = %q, want the hazard note on stderr only", out.String())
+	}
+
+	resolved, err := r.Reg.Resolve("noted")
+	if err != nil {
+		t.Fatalf("Resolve after AliasAdd: %v", err)
+	}
+	if resolved.Kind != registry.KindAlias {
+		t.Errorf("resolved kind = %q, want alias", resolved.Kind)
+	}
+}

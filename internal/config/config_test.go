@@ -12,6 +12,9 @@ func TestLoad_Defaults(t *testing.T) {
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir reads USERPROFILE on Windows
 	t.Setenv("UC_HOME", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
+	// The vi fallback below is only reachable with $EDITOR unset; without
+	// this the test passes or fails depending on the developer's shell.
+	t.Setenv("EDITOR", "")
 
 	cfg, err := Load()
 	if err != nil {

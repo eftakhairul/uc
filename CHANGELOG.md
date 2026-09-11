@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `.py` scripts now run where only `python` exists (Windows, minimal Linux
+  images): interpreters are resolved from an ordered candidate list, trying
+  `python3` first and falling back to `python`.
+- `uc alias add`/`uc alias edit` warn when the command text ends in a
+  control operator or contains a comment, which would silently swallow or
+  detach the invocation args appended as `"$@"`.
+- Scripts whose first 25 lines contain a line larger than the metadata
+  scanner's buffer (minified files, binaries) no longer disappear from
+  `uc list`, the picker, and completions — they list without a description
+  instead of being skipped.
 - `uc add` no longer writes outside the scripts directory: names containing
   path separators or `..` are rejected. It also refuses to silently
   overwrite an existing script or create a cross-extension ambiguity —

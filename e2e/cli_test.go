@@ -182,6 +182,42 @@ func TestAddGuards(t *testing.T) {
 	assert.Contains(t, out, "invalid script name", "traversal add output")
 }
 
+func TestAliasAppendHazardWarning(t *testing.T) {
+	env := sandbox(t)
+
+	// The command ends in a comment, so the auto-appended "$@" is commented
+	// out — uc warns but still registers the alias.
+	out, code := runUC(t, env, "alias", "add", "noted", "echo hi # my note")
+	require.Equalf(t, 0, code, "alias add: output:\n%s", out)
+	assert.Contains(t, out, "note:", "alias add output should carry the hazard warning")
+
+	out, code = runUC(t, env, "alias", "list")
+	require.Zerof(t, code, "alias list output:\n%s", out)
+	assert.Contains(t, out, "noted", "the alias is still registered")
+
+	// A clean command gets no warning.
+	out, code = runUC(t, env, "alias", "add", "clean", "echo hi")
+	require.Equalf(t, 0, code, "alias add clean: output:\n%s", out)
+	assert.NotContains(t, out, "note:", "clean command should not warn")
+}
+
+func TestOversizedLineScriptStillListed(t *testing.T) {
+	env := sandbox(t)
+
+	// A line bigger than the metadata scanner's buffer (minified file,
+	// stray binary) must not hide the script from listings.
+	_, code := execIn(t, nil, "sh", "-c",
+		`{ printf '#!/bin/sh\n'; head -c 70000 /dev/zero | tr '\0' 'x'; printf '\necho ran\n'; } > /tmp/huge.sh`)
+	require.Zero(t, code, "stage oversized script")
+
+	out, code := runUC(t, env, "add", "/tmp/huge.sh", "huge")
+	require.Equalf(t, 0, code, "add: output:\n%s", out)
+
+	out, code = runUC(t, env, "list")
+	require.Zerof(t, code, "list output:\n%s", out)
+	assert.Contains(t, out, "huge", "oversized-line script must appear in uc list")
+}
+
 func TestShadowWarning(t *testing.T) {
 	env := sandbox(t)
 
