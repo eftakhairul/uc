@@ -111,7 +111,8 @@ win over a script/alias/function of the same name, so `uc add`,
 
 Any language works, as long as it's either executable with its own shebang
 or has one of these extensions: `.sh`, `.py`, `.js`, `.rb`, `.pl`. `uc`
-looks up the right interpreter on `$PATH` at runtime.
+looks up the right interpreter on `$PATH` at runtime — for `.py` it tries
+`python3` first, then `python`, so Windows and minimal images work too.
 
 Add metadata tags that show up in `uc list`, the picker, and `uc help
 <name>`:
@@ -277,8 +278,9 @@ make clean
 
 `uc version` reports `git describe --tags` (e.g. `v0.2.0` or
 `v0.2.0-3-gabc1234-dirty`), baked in at build time via `-ldflags`. Without
-a git repo or tags, it falls back to `dev`. Tag a release with
-`git tag v0.1.0` before building to get a real version string.
+tags it falls back to the commit hash, and to `dev` when built outside a
+git repo. Tag a release with `git tag v0.1.0` before building to get a real
+version string.
 
 Module boundaries mirror the architecture doc (`uc-ARCHITECTURE.md`):
 `registry` (three-tier name resolution + metadata tags), `aliases` +

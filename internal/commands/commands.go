@@ -376,8 +376,20 @@ func (r *Runner) AliasAdd(name, command, desc string) error {
 		return err
 	}
 	fmt.Fprintf(r.Out, "added alias %s -> %s\n", name, command)
+	warnIfAppendHazard(command)
 	r.warnIfShadowed(name, registry.KindAlias)
 	return nil
+}
+
+// warnIfAppendHazard notes on stderr when the executor's `"$@"` append
+// would misbehave against this command text — a comment or a trailing
+// control operator silently swallows or detaches the user's args
+// (architecture §3.2b). A warning, not a rejection: the composition may
+// still be what the user meant.
+func warnIfAppendHazard(command string) {
+	if hazard := aliases.AppendHazard(command); hazard != "" {
+		fmt.Fprintf(os.Stderr, "uc: note: %s — uc appends your invocation args as \"$@\" at the end\n", hazard)
+	}
 }
 
 // warnIfShadowed prints a note if name won't actually resolve to the kind
@@ -417,6 +429,7 @@ func (r *Runner) AliasEdit(name string) error {
 		return err
 	}
 	fmt.Fprintf(r.Out, "updated alias %s -> %s\n", name, a.Command)
+	warnIfAppendHazard(a.Command)
 	return nil
 }
 

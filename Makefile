@@ -35,7 +35,7 @@ vet:
 	go vet ./...
 
 fmt:
-	gofmt -l .
+	gofmt -l $(shell find . -path ./vendor -prune -o -name '*.go' -print)
 
 clean:
 	rm -rf dist

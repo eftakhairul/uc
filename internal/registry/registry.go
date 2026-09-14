@@ -4,6 +4,7 @@ package registry
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -236,7 +237,10 @@ func (r *Registry) listScripts() ([]script, error) {
 		name := BareName(e.Name())
 		meta, err := ExtractMeta(path)
 		if err != nil {
-			continue // unreadable file: skip rather than fail the whole listing
+			// Unreadable metadata must not hide a registered script: list it
+			// without a description rather than dropping it, so it doesn't
+			// look unregistered while still being runnable.
+			meta = Meta{}
 		}
 		scripts = append(scripts, script{Name: name, Path: path, Desc: meta.Desc})
 	}
@@ -295,5 +299,12 @@ func ExtractMeta(path string) (Meta, error) {
 			m.Examples = append(m.Examples, value)
 		}
 	}
-	return m, scanner.Err()
+	// A line too long for the scanner's buffer (a minified file, an
+	// accidentally registered binary) can't be a "# @tag:" comment, so it
+	// ends the metadata scan rather than failing it — any tags already
+	// collected are still valid.
+	if err := scanner.Err(); err != nil && !errors.Is(err, bufio.ErrTooLong) {
+		return m, err
+	}
+	return m, nil
 }

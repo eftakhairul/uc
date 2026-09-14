@@ -36,3 +36,9 @@ dist/
 
 # internal files
 uc-ARCHITECTURE.md
+
+# Vendored dependencies must always be committed in full. Without this,
+# generic rules (e.g. a global ~/.gitignore with "build/") silently drop
+# vendored packages like moby/moby/api/types/build and break -mod=vendor.
+!vendor/
+!vendor/**
