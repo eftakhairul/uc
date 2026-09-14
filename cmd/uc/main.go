@@ -83,14 +83,23 @@ func main() {
 }
 
 func runAdd(r *commands.Runner, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: uc add <path> [name]")
+	force := false
+	var rest []string
+	for _, a := range args {
+		if a == "--force" {
+			force = true
+			continue
+		}
+		rest = append(rest, a)
+	}
+	if len(rest) < 1 || len(rest) > 2 {
+		return fmt.Errorf("usage: uc add <path> [name] [--force]")
 	}
 	name := ""
-	if len(args) >= 2 {
-		name = args[1]
+	if len(rest) == 2 {
+		name = rest[1]
 	}
-	return r.Add(args[0], name)
+	return r.Add(rest[0], name, force)
 }
 
 func runRemove(r *commands.Runner, args []string) error {

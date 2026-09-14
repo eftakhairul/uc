@@ -4,6 +4,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -102,8 +103,20 @@ func (r *Runner) List() error {
 	return nil
 }
 
-// Add implements `uc add <path> [name]`.
-func (r *Runner) Add(srcPath, name string) error {
+// validScriptName rejects names that would escape or hide inside
+// ScriptsDir: empty, ".", "..", or anything containing a path separator.
+// Both separators are checked regardless of GOOS so a registry synced
+// across platforms stays traversal-safe.
+func validScriptName(name string) error {
+	if name == "" || name == "." || name == ".." ||
+		strings.ContainsAny(name, `/\`) || name != filepath.Base(name) {
+		return fmt.Errorf("invalid script name %q", name)
+	}
+	return nil
+}
+
+// Add implements `uc add <path> [name] [--force]`.
+func (r *Runner) Add(srcPath, name string, force bool) error {
 	info, err := os.Stat(srcPath)
 	if err != nil {
 		return fmt.Errorf("%s: %w", srcPath, err)
@@ -114,6 +127,9 @@ func (r *Runner) Add(srcPath, name string) error {
 
 	if name == "" {
 		name = filepath.Base(srcPath)
+	}
+	if err := validScriptName(name); err != nil {
+		return err
 	}
 	// Reserved subcommands always win at dispatch, so a script registered
 	// under one would be unrunnable — reject up front, same as alias/function
@@ -127,6 +143,25 @@ func (r *Runner) Add(srcPath, name string) error {
 	}
 
 	destPath := filepath.Join(r.Cfg.ScriptsDir, name)
+	if !force {
+		if _, err := os.Stat(destPath); err == nil {
+			return fmt.Errorf("%s already exists — pass --force to overwrite, or remove it with `uc remove %s`",
+				destPath, registry.BareName(name))
+		}
+		// A same-named script under another extension would make the bare
+		// name ambiguous at invocation time (script resolution tries every
+		// known extension) — reject that too.
+		existing, err := r.Reg.ResolveScript(registry.BareName(name))
+		if err == nil && existing != destPath {
+			return fmt.Errorf("%q would be ambiguous with %s — remove it first or pass --force",
+				registry.BareName(name), existing)
+		}
+		if _, ok := errors.AsType[*registry.AmbiguousNameError](err); ok {
+			return fmt.Errorf("%q is already ambiguous — remove one of the existing scripts first or pass --force: %w",
+				registry.BareName(name), err)
+		}
+	}
+
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return fmt.Errorf("%s: %w", srcPath, err)
@@ -341,8 +376,20 @@ func (r *Runner) AliasAdd(name, command, desc string) error {
 		return err
 	}
 	fmt.Fprintf(r.Out, "added alias %s -> %s\n", name, command)
+	warnIfAppendHazard(command)
 	r.warnIfShadowed(name, registry.KindAlias)
 	return nil
+}
+
+// warnIfAppendHazard notes on stderr when the executor's `"$@"` append
+// would misbehave against this command text — a comment or a trailing
+// control operator silently swallows or detaches the user's args
+// (architecture §3.2b). A warning, not a rejection: the composition may
+// still be what the user meant.
+func warnIfAppendHazard(command string) {
+	if hazard := aliases.AppendHazard(command); hazard != "" {
+		fmt.Fprintf(os.Stderr, "uc: note: %s — uc appends your invocation args as \"$@\" at the end\n", hazard)
+	}
 }
 
 // warnIfShadowed prints a note if name won't actually resolve to the kind
@@ -382,6 +429,7 @@ func (r *Runner) AliasEdit(name string) error {
 		return err
 	}
 	fmt.Fprintf(r.Out, "updated alias %s -> %s\n", name, a.Command)
+	warnIfAppendHazard(a.Command)
 	return nil
 }
 
@@ -572,7 +620,7 @@ Usage:
 
 Management commands:
   uc list, uc ls          List registered scripts, aliases, and functions
-  uc add <path> [name]    Register a script
+  uc add <path> [name] [--force]   Register a script
   uc remove <name>, rm    Unregister a script, alias, or function
   uc which <name>         Print what a name resolves to, and its kind
   uc edit <name>          Open a script, alias, or function in $EDITOR

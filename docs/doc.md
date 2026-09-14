@@ -63,6 +63,14 @@ uc add ~/scripts/killport.sh killport
 # added /Users/you/scripts/killport.sh -> /Users/you/.uc/scripts/killport
 ```
 
+If the name is already registered (or would be ambiguous with a same-named
+script under another extension), `uc add` refuses rather than silently
+overwriting. Re-register a script deliberately with `--force`:
+
+```sh
+uc add ~/scripts/killport.sh killport --force
+```
+
 ### Run a script
 
 ```sh
@@ -99,6 +107,20 @@ uc gs -s
 ```
 
 Args you pass are appended at the end, just like bash alias expansion.
+
+### Gotcha: trailing `#`, `&`, `;` and `|`
+
+Because your args are appended to the command text as `"$@"`, a command that
+ends in a comment or a control operator changes what that append means:
+
+```sh
+uc alias add x 'echo hi # my note'   # -> echo hi # my note "$@"   (args ignored)
+uc alias add y 'long-task &'         # -> long-task & "$@"         (args run on their own)
+```
+
+`uc alias add`/`uc alias edit` print a note when they spot this. It's a
+warning, not a rejection — if the composition is what you meant, nothing
+changes.
 
 ### Alias with a pipeline
 

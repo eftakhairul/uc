@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/eftakhairul/uc/internal/aliases"
@@ -238,4 +240,81 @@ func TestList_MergesAllThreeKinds(t *testing.T) {
 			t.Errorf("items[%d].Kind = %q, want %q", i, it.Kind, want[it.Name])
 		}
 	}
+}
+
+// A line longer than bufio.Scanner's 64KB buffer (minified JS, a binary
+// registered by mistake) used to fail the metadata scan, which in turn
+// hid the script from List entirely.
+func TestExtractMeta_OversizedLine(t *testing.T) {
+	dir := t.TempDir()
+	giant := strings.Repeat("x", 70*1024)
+
+	path := writeScript(t, dir, "huge.js", giant+"\n")
+	meta, err := ExtractMeta(path)
+	if err != nil {
+		t.Fatalf("ExtractMeta: %v", err)
+	}
+	if meta.Desc != "" {
+		t.Errorf("Desc = %q, want empty", meta.Desc)
+	}
+
+	// Tags before the oversized line are still collected.
+	tagged := writeScript(t, dir, "tagged.js", "// x\n# @desc: minified thing\n"+giant+"\n")
+	meta, err = ExtractMeta(tagged)
+	if err != nil {
+		t.Fatalf("ExtractMeta (tagged): %v", err)
+	}
+	if meta.Desc != "minified thing" {
+		t.Errorf("Desc = %q, want the tag before the giant line", meta.Desc)
+	}
+}
+
+func TestList_IncludesScriptsWithUnreadableMeta(t *testing.T) {
+	dir := t.TempDir()
+	writeScript(t, dir, "normal.sh", "#!/bin/sh\n# @desc: a normal one\necho hi\n")
+	writeScript(t, dir, "huge.js", strings.Repeat("x", 70*1024)+"\n")
+
+	reg := newTestRegistry(t, dir)
+	items, err := reg.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	found := map[string]string{}
+	for _, it := range items {
+		found[it.Name] = it.Desc
+	}
+	if _, ok := found["huge"]; !ok {
+		t.Errorf("List = %v, want it to include the oversized-line script", found)
+	}
+	if found["normal"] != "a normal one" {
+		t.Errorf("normal desc = %q, want it intact", found["normal"])
+	}
+}
+
+func TestList_IncludesUnreadableScript(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permission semantics")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file permissions")
+	}
+	dir := t.TempDir()
+	path := writeScript(t, dir, "secret.sh", "#!/bin/sh\necho hi\n")
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o755) })
+
+	reg := newTestRegistry(t, dir)
+	items, err := reg.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, it := range items {
+		if it.Name == "secret" {
+			return
+		}
+	}
+	t.Errorf("List = %v, want the unreadable script to still be listed", items)
 }
