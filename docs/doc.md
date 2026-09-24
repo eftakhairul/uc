@@ -74,6 +74,44 @@ overwriting. Re-register a script deliberately with `--force`:
 uc add ~/scripts/killport.sh killport --force
 ```
 
+### Create a script from scratch
+
+When there's no file yet, `uc new` skips the write-it-then-add-it dance: it
+writes a template into `~/.uc/scripts/` first and opens `$EDITOR` on it, so
+saving the file is what registers it.
+
+```sh
+uc new killport
+# (editor opens on ~/.uc/scripts/killport.sh)
+# created /Users/you/.uc/scripts/killport.sh — run it with: uc killport
+```
+
+The scaffold arrives pre-filled with a shebang and an empty metadata block,
+ready to fill in:
+
+```sh
+#!/usr/bin/env bash
+# @desc:
+# @usage: killport <args>
+# @example: killport
+
+set -euo pipefail
+```
+
+Pick another language with `--lang` (`sh`, `py`, `js`, `rb`, `pl`; default
+`sh`) — it sets both the shebang and the file extension:
+
+```sh
+uc new report --lang py   # ~/.uc/scripts/report.py, python3 shebang
+```
+
+Two ways nothing gets registered: quit the editor without touching the
+template (like `git commit` with an unedited message) and `uc new` prints
+`aborted, nothing registered`; exit the editor non-zero and it reports the
+failure. Either way no file is left behind. `uc new` also refuses a name
+that's already taken by a script, alias, or function, or that's a reserved
+subcommand — use `uc edit <name>` to change something that exists.
+
 ### Run a script
 
 ```sh

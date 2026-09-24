@@ -11,6 +11,7 @@ import "slices"
 var Names = []string{
 	"list", "ls",
 	"add",
+	"new",
 	"remove", "rm",
 	"which",
 	"edit",

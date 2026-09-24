@@ -39,6 +39,8 @@ func main() {
 		cmdErr = r.List()
 	case "add":
 		cmdErr = runAdd(r, rest)
+	case "new":
+		cmdErr = runNew(r, rest)
 	case "remove", "rm":
 		cmdErr = runRemove(r, rest)
 	case "which":
@@ -100,6 +102,27 @@ func runAdd(r *commands.Runner, args []string) error {
 		name = rest[1]
 	}
 	return r.Add(rest[0], name, force)
+}
+
+func runNew(r *commands.Runner, args []string) error {
+	usage := fmt.Errorf("usage: uc new <name> [--lang sh|py|js|rb|pl]")
+	lang := "sh"
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--lang" {
+			if i+1 >= len(args) {
+				return usage
+			}
+			lang = args[i+1]
+			i++
+			continue
+		}
+		rest = append(rest, args[i])
+	}
+	if len(rest) != 1 {
+		return usage
+	}
+	return r.New(rest[0], lang)
 }
 
 func runRemove(r *commands.Runner, args []string) error {

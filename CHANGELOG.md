@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `uc new <name> [--lang sh|py|js|rb|pl]` scaffolds a script: it writes a
+  template (shebang plus an empty `@desc`/`@usage`/`@example` block) directly
+  into `$UC_HOME/scripts/` and opens `$EDITOR` on it, so saving the file
+  registers it — no separate `uc add` step. Quitting with the template
+  unchanged, or a non-zero editor exit, registers nothing and leaves no file
+  behind. Names already taken by a script, alias, or function are refused.
+  `new` is now a reserved subcommand name, so it wins over a script of the
+  same name (minor breaking change).
+
 - `uc completion fish` emits a fish completion script. Fish autoloads it from
   `~/.config/fish/completions/uc.fish` (no `eval` at shell startup) and shows
   each candidate's description — a script's `@desc` tag or an alias/function's
