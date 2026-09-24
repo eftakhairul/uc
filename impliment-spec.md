@@ -4,19 +4,20 @@ Detailed, feature-by-feature implementation spec for the next release. Features
 are ordered small → large so value ships early and each lands as an
 independently green `feat:` commit.
 
-1. [Fish shell completion](#1-fish-shell-completion)
-2. [`uc new` — scaffold a script](#2-uc-new--scaffold-a-script)
-3. [`uc add <url>` — register from a URL/gist](#3-uc-add-url--register-from-a-urlgist)
+1. [Fish shell completion](#1-fish-shell-completion) — **shipped**
+2. [`uc new` — scaffold a script](#2-uc-new--scaffold-a-script) — **shipped**
+3. [`uc add <url>` — register from a URL/gist](#3-uc-add-url--register-from-a-urlgist) ← **next**
 4. [`uc stats` + `uc history search`](#4-uc-stats--uc-history-search)
 5. [Tags](#5-tags)
 6. [Env injection](#6-env-injection)
 7. [`uc sync` — git-backed sync](#7-uc-sync--git-backed-sync-no-server)
 
-**Out of scope (separate bug, do not fix here):** the released Windows binary
-is broken at runtime — Go's Windows `syscall.Exec` is a stub that always
-returns `EWINDOWS` (`GOOS=windows go build` compiles clean, so goreleaser
-happily ships it) — and `.goreleaser.yml` `archives.files` references a
-`completion/*` glob that matches nothing in the repo.
+**Previously out of scope, now fixed — no bug work is pending here.** Both
+items (the Windows `syscall.Exec` stub that made every `uc <name>` fail at
+runtime, and the `.goreleaser.yml` `archives.files` `completion/*` glob that
+matched nothing) landed ahead of this spec's feature work; see
+`CHANGELOG.md` → `[Unreleased]` → `Fixed`. Windows now spawns the command
+with inherited stdio (`internal/executor/exec_windows.go`).
 
 ---
 
@@ -29,32 +30,48 @@ seams. Apply this checklist per feature:
 | Seam | Change |
 |---|---|
 | `internal/reserved/reserved.go` | Append `"new"`, `"sync"`, `"stats"` to `Names` (reserved names always win over same-named scripts — note in CHANGELOG as minor breaking). |
-| `cmd/uc/main.go` | New `case` in the flat dispatch switch + a hand-rolled `runX(r *commands.Runner, args []string) error` arg parser. Follow `runAlias` (main.go:155) for verb families and `runAliasAdd` (main.go:179) for flag scanning. **No flag package** — the repo hand-rolls all parsing. |
-| `internal/commands/commands.go` | Handler method on `Runner`, normal output via `fmt.Fprintf(r.Out, ...)` (injectable for tests), warnings via `os.Stderr`. Update the `helpText` const (commands.go:567). |
+| `cmd/uc/main.go` | New `case` in the flat dispatch switch + a hand-rolled `runX(r *commands.Runner, args []string) error` arg parser. Follow `runAlias` (main.go:169) for verb families and `runAliasAdd` (main.go:193) for flag scanning. **No flag package** — the repo hand-rolls all parsing. |
+| `internal/commands/commands.go` | Handler method on `Runner`, normal output via `fmt.Fprintf(r.Out, ...)` (injectable for tests), warnings via `os.Stderr`. Update the `helpText` const (commands.go:620). |
 | `internal/help/help.go` | `staticText` map entry (duplicate the entry verbatim for any alias name, matching the existing `list`/`ls` pattern). |
-| Docs | `README.md` command table (~line 84) and config section; `docs/doc.md` TOC + section; `CHANGELOG.md` under `## [Unreleased]` → `### Added`. |
+| Docs | `README.md` command table (starts README.md:88) and config section; `docs/doc.md` TOC + section; `CHANGELOG.md` under `## [Unreleased]` → `### Added` (the section already exists — the fish entry is there). |
 | Commit | `feat: ...` prefix (goreleaser changelog grouping). |
 
 **Existing utilities to reuse — do not reinvent:**
 
 - `Cfg.EditorCommand()` (config.go:138) — settings.json `editor` → `$EDITOR` → `vi`; split with `strings.Fields`.
-- `Runner.editViaTempFile(pattern, initial)` (commands.go:510) — child-process editor round-trip pattern.
-- `registry.BareName` (registry.go:250), `registry.ExtractMeta` (registry.go:270), `Registry.List()` (registry.go:171).
+- `Runner.editViaTempFile(pattern, initial)` (commands.go:563) — child-process editor round-trip pattern.
+- `commands.validScriptName(name)` (commands.go:110) — rejects `""`, `.`, `..`, path
+  separators, and anything where `name != filepath.Base(name)`. Already called by
+  `Add` (commands.go:130); reuse it for every new name-taking command.
+- `registry.BareName` (registry.go:254), `registry.ExtractMeta` (registry.go:274), `Registry.List()` (registry.go:172).
 - `reserved.Is` (reserved.go:31).
 - `atomicfile.Write` (atomicfile.go:14) — JSON stores only; it does temp+rename but no exec bit, so never use it for scripts without a follow-up chmod.
-- `executor.ExecReplace` (executor.go:87) — only for flows that never need control back.
+- `executor.ExecReplace` (executor.go:113) — only for flows that never need control back.
 - E2E helpers: `sandbox`, `runUC`, `writeFile`, `withEnv`, `fake-editor` (`$EDITOR_NEW_CONTENT`), `fake-editor-fail` (e2e/e2e_test.go, e2e/cli_test.go).
 
 **Test conventions:** unit tests are stdlib-only (no testify), `t.TempDir()` +
 `t.Setenv`, error types checked via `errors.AsType[*T]`. E2E tests
 (`//go:build e2e`, `make test-e2e`) use testify + testcontainers on
-`debian:bookworm-slim`. There is currently **no** `commands` package test —
-feature 2 introduces `internal/commands/commands_test.go` with a
-`bytes.Buffer` as `Runner.Out`; later features extend it.
+`debian:bookworm-slim`. `internal/commands/commands_test.go` **already
+exists** (added by the `uc add` hardening and fish-completion work): use its
+`newTestRunner(t)` helper (commands_test.go:18), which returns a `*Runner`
+wired to a temp `UC_HOME` plus the `*bytes.Buffer` behind `Runner.Out`, and
+its `writeScript(t, dir, name, content)` helper (commands_test.go:32). Every
+feature below extends that file rather than creating it.
 
 ---
 
 ## 1. Fish shell completion
+
+> **Status: shipped** — commit `7c51c01` (PR #8). Kept as the record of what
+> landed. Where it lives now: `completion.Pair` (completion.go:19),
+> `DescribedCandidates` (completion.go:43), `fishScript` (completion.go:128),
+> `Runner.Complete(partial, describe)` (commands.go:266), `runComplete`
+> (main.go:133), tests in `internal/completion/completion_test.go` and
+> `TestCompleteDescribe*` in `commands_test.go`, docs at README.md:57 /
+> README.md:208 and docs/doc.md:203. CHANGELOG entry written. The line
+> references inside this section are as-designed, not as-built — read the
+> files for current positions.
 
 ### Goal
 
@@ -198,6 +215,14 @@ just for this; the unit tests cover the contract).
 
 ## 2. `uc new` — scaffold a script
 
+> **Status: shipped** on `feature/add-script-editor`. Built as specced, with
+> two deliberate deviations: (a) `templates` is an ordered **slice** of
+> `scriptTemplate` rather than a map, so `--lang` error text lists the values
+> in usage order; (b) `uc new killport.sh` reuses the given extension instead
+> of producing `killport.sh.sh`. Only `sh` carries a `set -euo pipefail`
+> preamble — the other four are shebang + metadata block, since a preamble
+> would be language-specific boilerplate nobody asked for.
+
 ### Goal
 
 Collapse “write a script somewhere, chmod it, `uc add` it” into one step:
@@ -213,8 +238,11 @@ uc new <name> [--lang sh|py|js|rb|pl]     # default: sh
 ### Design
 
 1. **Validate** `name`:
-   - `reserved.Is(name)` → `"%q is a reserved subcommand name"` (same message
-     as `Add`, commands.go:122).
+   - `validScriptName(name)` (commands.go:110) → `"invalid script name %q"`.
+     Call it first, exactly as `Add` does (commands.go:130) — it already
+     covers the `/`, `\`, `..` and leading-`.` cases below.
+   - `reserved.Is(registry.BareName(name))` → `"%q is a reserved subcommand name"`
+     (same message and same `BareName` wrapping as `Add`, commands.go:137).
    - `r.Reg.Resolve(name)` succeeds → `"%q already exists (%s) — use `uc edit %s`"`
      with the resolved kind. (`*NotFoundError` is the good path;
      `*AmbiguousNameError` also blocks.)
@@ -222,11 +250,12 @@ uc new <name> [--lang sh|py|js|rb|pl]     # default: sh
 2. **Create**: `Cfg.EnsureDirs()`, then write the language template to
    `filepath.Join(Cfg.ScriptsDir, name+ext)` with mode `0o755`
    (`os.WriteFile`). Extension per lang (`.sh`, `.py`, `.js`, `.rb`, `.pl`) —
-   matches `extPriority` (registry.go:21) so `BareName` strips it at resolve
-   time and the executor picks the right interpreter (executor.go:17).
+   matches `extPriority` (registry.go:22) so `BareName` strips it at resolve
+   time and the executor picks the right interpreter (the `interpreters` map,
+   executor.go:21, which now holds an ordered candidate list per extension).
 3. **Edit**: run the editor as a **child process** on the final path — the
    same `exec.Command` + wired `os.Stdin/Stdout/Stderr` pattern as
-   `editViaTempFile` (commands.go:525-533), *not* `ExecReplace`, because uc
+   `editViaTempFile` (commands.go:578-586), *not* `ExecReplace`, because uc
    must regain control to validate. Factor the “run editor on path, wait”
    portion into a small shared helper (e.g. `runEditor(path string) error`)
    used by both `editViaTempFile` and `New` rather than duplicating.
@@ -271,9 +300,10 @@ picks it up for every lang.
 
 ### Edge cases
 
-- Name containing `/` or starting with `.` → reject
-  (`"invalid name %q"`) — it would escape or hide in `ScriptsDir`. (`Add`
-  doesn't validate this today; do not retrofit `Add` in this commit.)
+- Name containing `/`, `\` or equal to `.`/`..` → rejected by the shared
+  `validScriptName` (commands.go:110); it would escape or hide in
+  `ScriptsDir`. Do **not** write a second validator — `Add` already uses this
+  one, and its message (`invalid script name %q`) is the one to keep.
 - A same-named file with a *different* extension already exists → the Resolve
   pre-check catches it (any extension resolves).
 - `$EDITOR` unset → `EditorCommand()` falls back to `vi`; non-interactive
@@ -281,10 +311,9 @@ picks it up for every lang.
 
 ### Tests
 
-New `internal/commands/commands_test.go` (first test file for this package;
-`Runner{Cfg: ..., Reg: ..., Out: &bytes.Buffer{}}` with temp
-`UC_HOME`/`XDG_CONFIG_HOME` via `t.Setenv`, `EDITOR` pointed at a shell stub
-script created in `t.TempDir()`):
+Added to the existing `internal/commands/commands_test.go` via
+`newTestRunner(t)` (commands_test.go:18), with `EDITOR` pointed at a shell
+stub script created in `t.TempDir()`:
 
 - Happy path: stub editor appends a line → file exists in scripts dir, mode
   has 0o100 exec bit, output contains `created`; `Reg.Resolve(name)` finds it.
@@ -316,9 +345,13 @@ uc add https://gist.github.com/user/abc123 killport      # gist page → /raw
 
 ### Design
 
-Branch at the top of `Runner.Add` (commands.go:106): if `srcPath` has prefix
-`http://` or `https://`, take the fetch path; the local-file path is
-untouched.
+Branch at the top of `Runner.Add` (commands.go:119 — signature is now
+`Add(srcPath, name string, force bool)`): if `srcPath` has prefix `http://`
+or `https://`, take the fetch path; the local-file path is untouched. The
+URL path must thread `force` through to the same overwrite/ambiguity
+pre-checks the local path runs (commands.go:146-162) — a URL install is not
+a licence to clobber. `runAdd` (main.go:85) already parses `--force`, so no
+new flag scanning is needed.
 
 1. **URL rewrite** — pure function `rawURL(raw string) (string, error)`:
    parse with `net/url`; if host is `gist.github.com` and the path does not
@@ -328,7 +361,9 @@ untouched.
 2. **Name derivation** — explicit `name` arg wins; else `path.Base(u.Path)`.
    If the result is empty, `"/"`, `"raw"`, or `"."` → error
    `cannot derive a name from this URL, pass one explicitly: uc add <url> <name>`.
-   Then the existing reserved check on `registry.BareName(name)`.
+   Then the existing `validScriptName` + reserved checks on the derived name
+   (a URL path can yield `..` or an empty base, so validation is not
+   optional here).
 3. **Fetch** — `http.Client{Timeout: 30 * time.Second}`; non-200 →
    `"fetch %s: %s"` with the status. Read via
    `io.LimitReader(resp.Body, 1<<20)` (1 MB cap); empty body → error.
@@ -344,9 +379,10 @@ untouched.
   `addFromURL(rawurl, name string) error`.
 - `internal/help/help.go` — extend the `"add"` entry with the URL form and
   the gist behavior.
-- `helpText` const (`uc add <path|url> [name]`), main.go `runAdd` usage
-  string, README table + docs/doc.md “Add a script from a URL” subsection,
-  CHANGELOG.
+- `helpText` const (commands.go:628 currently reads
+  `uc add <path> [name] [--force]` → `uc add <path|url> [name] [--force]`),
+  main.go `runAdd` usage string (main.go:98), README table + docs/doc.md
+  “Add a script from a URL” subsection, CHANGELOG.
 
 ### Edge cases
 
@@ -390,13 +426,13 @@ uc stats                    # per-name counts over the retained window
 
 ### Design
 
-**`history search`** — new verb inside `runHistory` (main.go:132), before the
+**`history search`** — new verb inside `runHistory` (main.go:146), before the
 numeric-count parse: `args[0] == "search"` requires exactly one further arg
 (`usage: uc history search <term>`). Handler
 `func (r *Runner) HistorySearch(term string) error`: load history, filter
 where `strings.Contains(strings.ToLower(name + " " + strings.Join(args, " ")), strings.ToLower(term))`,
 print matches most-recent-first in the **exact** format `History` uses.
-Extract the formatting loop of `History` (commands.go:275-288) into a shared
+Extract the formatting loop of `History` (commands.go:318-331) into a shared
 `printEntries(entries []history.Entry, now time.Time)` helper so search and
 history render identically; empty result → `no matching history entries`.
 Numbering note: printed indices are the entries' positions in the full
@@ -440,7 +476,7 @@ based on the last 18 invocations (history_size: 25)
 
 - Ties in count → name-alphabetical for stable output (tests depend on it).
 - `Kind` empty on pre-existing history entries → display `script` (same
-  fallback as `History`, commands.go:284).
+  fallback as `History`, commands.go:326-329).
 - `uc history run` continues to work unchanged; `search` must be checked
   before the `strconv.Atoi` fallthrough so `uc history search 5` searches for
   `"5"` rather than printing 5 entries.
@@ -470,7 +506,7 @@ aliases/functions, `uc list --tag git`, and `#git` filtering in the picker.
 
 ### Design
 
-**Metadata (scripts)** — `ExtractMeta` (registry.go:270) learns a repeatable
+**Metadata (scripts)** — `ExtractMeta` (registry.go:274) learns a repeatable
 `@tag` case: value split on `","`, each piece `strings.TrimSpace`d +
 `strings.ToLower`ed, empties dropped, appended to `Meta.Tags []string` (dedup
 via a small seen-set). `# @tag: git, network` and two separate `@tag:` lines
@@ -481,11 +517,11 @@ are equivalent.
 (forward-compatible: unknown keys are already ignored on load, `omitempty`
 keeps old files byte-stable on rewrite). `--tag <t>` repeatable flag parsed
 in `runAliasAdd` / `runFunctionAdd` with the same scan-loop shape as
-`--desc` (main.go:187-194); tags normalized (trim/lowercase) at parse time.
+`--desc` (main.go:201-209); tags normalized (trim/lowercase) at parse time.
 `AliasAdd`/`FunctionAdd` signatures gain `tags []string`.
 
-**Registry** — `registry.Item` (registry.go:160) and `Resolved`
-(registry.go:73) gain `Tags []string`; `List()` and `Resolve()` populate them
+**Registry** — `registry.Item` (registry.go:161) and `Resolved`
+(registry.go:74) gain `Tags []string`; `List()` and `Resolve()` populate them
 for all three kinds.
 
 **`uc list --tag <t>`** — main.go gains a `runList(r, rest)` parser (today
@@ -580,17 +616,23 @@ scripts and from the store maps for aliases/functions.
 parameter:
 
 ```go
-func Run(path string, args []string, extraEnv []string) error
-func RunAlias(command, name string, args, extraEnv []string) error
-func RunFunction(body, name string, args, extraEnv []string) error
-func runBash(script, name string, args, extraEnv []string) error
-func exec1(bin string, argv, extraEnv []string) error   // env := append(os.Environ(), extraEnv...)
+func Run(path string, args []string, extraEnv []string) error          // executor.go:56
+func RunAlias(command, name string, args, extraEnv []string) error     // executor.go:96
+func RunFunction(body, name string, args, extraEnv []string) error     // executor.go:86
+func runBash(script, name string, args, extraEnv []string) error       // executor.go:100
+
+// exec1 is per-GOOS — change both or the Windows build breaks:
+func exec1(bin string, argv, extraEnv []string) error   // exec_unix.go:12 — env := append(os.Environ(), extraEnv...)
+func exec1(bin string, argv, extraEnv []string) error   // exec_windows.go:18 — forwards to runChild, which already takes an env slice (exec_windows.go:30)
 ```
 
 Appending after `os.Environ()` means the entry's env **overrides** the
 session's (last occurrence wins in `execve` env lookup for libc and shells).
 `ExecReplace` is unchanged (it has no entry context).
-`execResolved` (commands.go:59) threads `resolved.Env` into each call.
+`execResolved` (commands.go:60) threads `resolved.Env` into each call. Note
+the executor now has per-GOOS files (`exec_unix.go` / `exec_windows.go`) —
+the env parameter has to be added to **both** implementations of the exec
+chokepoint, not just the Unix one, or the Windows build breaks.
 
 **No settings.json involvement** — env lives next to the entry it belongs to
 (metadata/store), not in config.
@@ -620,7 +662,10 @@ docs/doc.md (Metadata + Aliases/Functions sections), CHANGELOG.
 
 - `registry_test.go`: `@env` parsing — valid, missing `=`, empty key, order
   preserved; `Resolve` carries env for all three kinds.
-- Executor is exec-based and untestable in-process — covered by e2e:
+- The exec chokepoint itself is process-replacing and so mostly untestable
+  in-process; `internal/executor/executor_test.go` only covers the
+  pre-exec failure paths (interpreter lookup, missing `bash`), so keep the
+  env behaviour covered by e2e:
   a script `echo "$FOO"` with `# @env: FOO=bar` → output `bar`; an alias
   added with `--env FOO=baz` printing `$FOO` → `baz`; session override check
   (`FOO=session` in the container env, entry env wins).
@@ -758,7 +803,7 @@ func mirror(src, dst files) ([]change, error)
 ### Edge cases
 
 - `$UC_HOME/sync` inside `$UC_HOME` must **not** be treated as a script —
-  `listScripts` (registry.go:221) only reads `ScriptsDir`, so it's already
+  `listScripts` (registry.go:222) only reads `ScriptsDir`, so it's already
   safe; verify with a test.
 - First `Push` on a machine where `init` cloned non-empty: fine — push just
   mirrors and commits the delta.
@@ -805,9 +850,9 @@ One `feat:` commit per feature, in the order above; each leaves
 churn is reviewed once per feature, not re-shuffled.
 
 ```
-feat: fish shell completion with descriptions
-feat: uc new — scaffold a script into the registry
-feat: uc add <url> — register a script from a URL or gist
+feat: implememt fish completion                      # done — 7c51c01 (PR #8)
+feat: uc new — scaffold a script into the registry   # done — feature/add-script-editor
+feat: uc add <url> — register a script from a URL or gist   # next
 feat: uc stats and uc history search
 feat: tags — @tag metadata, uc list --tag, #tag picker filtering
 feat: per-entry env injection via @env tags and --env flags

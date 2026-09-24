@@ -39,6 +39,34 @@ func TestScriptLifecycle(t *testing.T) {
 	assert.Equalf(t, 127, code, "which after remove: want exit 127 (not found)")
 }
 
+// `uc new` writes the scaffold, hands it to $EDITOR, and registers whatever
+// comes back — so the script is runnable straight afterward with no `uc add`
+// step. (The abort path, where the template comes back unchanged, is
+// awkward to drive through fake-editor and is covered by unit tests.)
+func TestNewScaffoldsRunnableScript(t *testing.T) {
+	env := sandbox(t)
+	editEnv := withEnv(env, "EDITOR=/usr/local/bin/fake-editor",
+		"EDITOR_NEW_CONTENT=#!/bin/sh\n# @desc: scaffolded\necho scaffolded $1\n")
+
+	out, code := runUC(t, editEnv, "new", "t1")
+	require.Equalf(t, 0, code, "new: output:\n%s", out)
+	assert.Contains(t, out, "created", "new output")
+
+	out, code = runUC(t, env, "t1", "ok")
+	require.Zerof(t, code, "run scaffolded script: output:\n%s", out)
+	assert.Contains(t, out, "scaffolded ok", "run scaffolded script output")
+
+	out, code = runUC(t, env, "list")
+	require.Zerof(t, code, "list: output:\n%s", out)
+	assert.Contains(t, out, "scaffolded", "list output: @desc from the edited scaffold")
+
+	// A second `uc new` under the same name must refuse rather than
+	// clobber the script that now exists.
+	out, code = runUC(t, editEnv, "new", "t1")
+	assert.NotZero(t, code, "second new on the same name: want nonzero exit")
+	assert.Contains(t, out, "already exists", "second new output")
+}
+
 func TestAliasLifecycle(t *testing.T) {
 	env := sandbox(t)
 

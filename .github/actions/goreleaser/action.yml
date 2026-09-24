@@ -1,0 +1,33 @@
+name: 'Run GoReleaser'
+description: >-
+  Set up Go and run GoReleaser against the repo's .goreleaser.yml. Shared by
+  the CI build job (snapshot, artifacts only) and the release workflow
+  (publish), so the build matrix, ldflags, and archive layout are defined
+  exactly once — in .goreleaser.yml.
+
+inputs:
+  args:
+    description: >-
+      Arguments for the goreleaser CLI, e.g. "release --clean" to publish or
+      "release --snapshot --clean --skip=publish" for a throwaway build.
+    required: true
+  goreleaser-version:
+    description: GoReleaser version constraint passed to goreleaser-action.
+    required: false
+    default: '~> v2'
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache: true
+
+    - name: Run GoReleaser
+      uses: goreleaser/goreleaser-action@v6
+      with:
+        distribution: goreleaser
+        version: ${{ inputs.goreleaser-version }}
+        args: ${{ inputs.args }}

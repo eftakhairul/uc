@@ -74,6 +74,10 @@ $ uc killport 8080
 would kill port 8080
 ```
 
+Starting from scratch instead of an existing file? `uc new killport` opens a
+pre-filled template in `$EDITOR` that's already inside the registry, so
+saving it *is* registering it.
+
 `uc` hands the script direct control of the terminal — same stdin/stdout,
 same signal handling, same exit code, as if you'd run it yourself. It does
 this via process replacement (`execve`), not by spawning a subprocess.
@@ -91,6 +95,7 @@ always tells you which kind you got.
 | `uc` *(no args)* | Launch the interactive fuzzy picker |
 | `uc list` / `uc ls` | List scripts + aliases + functions, with kind and description |
 | `uc add <path> [name] [--force]` | Register a script (copies it in, sets +x). Refuses to overwrite or create an ambiguous name unless `--force` |
+| `uc new <name> [--lang sh\|py\|js\|rb\|pl]` | Scaffold a new script in `$EDITOR`, already registered (default lang: `sh`) |
 | `uc remove <name>` / `uc rm` | Unregister a script, alias, or function |
 | `uc which <name>` | Print what a name resolves to, and its kind |
 | `uc edit <name>` | Scripts: open in `$EDITOR`. Aliases/functions: temp-file round-trip through `$EDITOR`. |

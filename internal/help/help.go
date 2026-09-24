@@ -33,6 +33,20 @@ basename(path)> and sets its executable bit. Fails if the name already
 exists or would be ambiguous with another registered script; pass --force
 to overwrite anyway.
 `,
+	"new": `uc new <name> [--lang sh|py|js|rb|pl]
+
+Scaffold a new script and open it in $EDITOR. The file is created inside
+$UC_HOME/scripts/ before the editor opens, so saving it is what registers
+it — there's no separate 'uc add' step.
+
+The scaffold is pre-filled with a shebang for the chosen language (default:
+sh) and an empty '@desc/@usage/@example' metadata block, which 'uc list',
+the picker, and 'uc help <name>' read back.
+
+Quitting the editor without changing the template registers nothing, and a
+non-zero editor exit leaves nothing behind either. Use 'uc edit <name>' to
+change the script later.
+`,
 	"remove": `uc remove <name>, uc rm <name>
 
 Resolve <name> (script, alias, or function) and delete/unregister it.

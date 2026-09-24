@@ -185,6 +185,131 @@ func (r *Runner) Add(srcPath, name string, force bool) error {
 	return nil
 }
 
+// scriptTemplate is the scaffold `uc new` writes for one --lang value.
+type scriptTemplate struct {
+	lang    string
+	ext     string
+	shebang string
+	// preamble is language-specific boilerplate below the metadata block.
+	preamble string
+}
+
+// templates lists the supported --lang values, in the order shown in usage
+// and error text. All five languages use "#" comments, so the metadata block
+// ExtractMeta reads back is identical across them — only the shebang and
+// preamble differ. A slice (not a map) keeps that order stable.
+var templates = []scriptTemplate{
+	{lang: "sh", ext: ".sh", shebang: "#!/usr/bin/env bash", preamble: "set -euo pipefail\n"},
+	{lang: "py", ext: ".py", shebang: "#!/usr/bin/env python3"},
+	{lang: "js", ext: ".js", shebang: "#!/usr/bin/env node"},
+	{lang: "rb", ext: ".rb", shebang: "#!/usr/bin/env ruby"},
+	{lang: "pl", ext: ".pl", shebang: "#!/usr/bin/env perl"},
+}
+
+func lookupTemplate(lang string) (scriptTemplate, bool) {
+	for _, t := range templates {
+		if t.lang == lang {
+			return t, true
+		}
+	}
+	return scriptTemplate{}, false
+}
+
+// langList renders the valid --lang values for usage and error messages.
+func langList() string {
+	ls := make([]string, len(templates))
+	for i, t := range templates {
+		ls[i] = t.lang
+	}
+	return strings.Join(ls, "|")
+}
+
+// render fills the template for the name the script will be invoked by.
+func (t scriptTemplate) render(name string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n", t.shebang)
+	b.WriteString("# @desc:\n")
+	fmt.Fprintf(&b, "# @usage: %s <args>\n", name)
+	fmt.Fprintf(&b, "# @example: %s\n\n", name)
+	if t.preamble != "" {
+		fmt.Fprintf(&b, "%s\n", t.preamble)
+	}
+	return b.String()
+}
+
+// New implements `uc new <name> [--lang sh|py|js|rb|pl]` — writes a language
+// template straight into the scripts directory and opens $EDITOR on it, so
+// saving the file is what registers it. The editor runs as a child process
+// (not process replacement) because uc needs control back to decide whether
+// anything was actually written: an untouched template counts as an abort
+// and leaves nothing behind, mirroring `git commit` with an unedited message.
+func (r *Runner) New(name, lang string) error {
+	if err := validScriptName(name); err != nil {
+		return err
+	}
+	// Checked on the bare name since that's what's typed to invoke it —
+	// same reasoning as Add.
+	bare := registry.BareName(name)
+	if reserved.Is(bare) {
+		return fmt.Errorf("%q is a reserved subcommand name", bare)
+	}
+	tmpl, ok := lookupTemplate(lang)
+	if !ok {
+		return fmt.Errorf("unknown --lang %q (want %s)", lang, langList())
+	}
+
+	// Any existing resolution blocks: a script under another extension, an
+	// alias, or a function would shadow the new file or be shadowed by it.
+	// Not-found is the only good outcome here; an ambiguous name (or a
+	// broken store) is surfaced as-is.
+	if resolved, err := r.Reg.Resolve(bare); err == nil {
+		return fmt.Errorf("%q already exists (%s) — edit it with `uc edit %s`", bare, resolved.Kind, bare)
+	} else if _, notFound := errors.AsType[*registry.NotFoundError](err); !notFound {
+		return err
+	}
+
+	if err := r.Cfg.EnsureDirs(); err != nil {
+		return err
+	}
+	filename := name + tmpl.ext
+	if filepath.Ext(name) == tmpl.ext {
+		// `uc new killport.sh` shouldn't produce killport.sh.sh.
+		filename = name
+	}
+	destPath := filepath.Join(r.Cfg.ScriptsDir, filename)
+
+	initial := tmpl.render(bare)
+	if err := os.WriteFile(destPath, []byte(initial), 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", destPath, err)
+	}
+	// WriteFile's mode is subject to umask, so set the exec bit explicitly
+	// (same as Add) — extensionless scripts are run directly.
+	if err := os.Chmod(destPath, 0o755); err != nil {
+		return fmt.Errorf("chmod %s: %w", destPath, err)
+	}
+
+	if err := r.runEditor(destPath); err != nil {
+		os.Remove(destPath)
+		return fmt.Errorf("editor exited with an error, nothing registered: %w", err)
+	}
+
+	edited, err := os.ReadFile(destPath)
+	if err != nil {
+		os.Remove(destPath)
+		return fmt.Errorf("read %s: %w", destPath, err)
+	}
+	if string(edited) == initial {
+		if err := os.Remove(destPath); err != nil {
+			return fmt.Errorf("remove %s: %w", destPath, err)
+		}
+		fmt.Fprintln(r.Out, "aborted, nothing registered")
+		return nil
+	}
+
+	fmt.Fprintf(r.Out, "created %s — run it with: uc %s\n", destPath, bare)
+	return nil
+}
+
 // Remove implements `uc remove` / `uc rm` — resolves name across all three
 // kinds and unregisters it (architecture §3.4).
 func (r *Runner) Remove(name string) error {
@@ -575,13 +700,7 @@ func (r *Runner) editViaTempFile(pattern, initial string) (string, error) {
 		return "", fmt.Errorf("close temp file: %w", err)
 	}
 
-	argv := append(strings.Fields(r.Cfg.EditorCommand()), tmpPath)
-	if len(argv) == 0 {
-		return "", fmt.Errorf("empty editor command")
-	}
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := r.runEditor(tmpPath); err != nil {
 		return "", fmt.Errorf("editor exited with an error, nothing saved: %w", err)
 	}
 
@@ -590,6 +709,20 @@ func (r *Runner) editViaTempFile(pattern, initial string) (string, error) {
 		return "", fmt.Errorf("read edited content: %w", err)
 	}
 	return string(edited), nil
+}
+
+// runEditor opens $EDITOR on path as a child process, wiring through the
+// terminal, and waits for it. Used by the flows that need control back
+// afterward to validate or persist the result — unlike `uc edit` on a
+// script, which replaces the process outright.
+func (r *Runner) runEditor(path string) error {
+	argv := append(strings.Fields(r.Cfg.EditorCommand()), path)
+	if len(argv) == 0 {
+		return fmt.Errorf("empty editor command")
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return cmd.Run()
 }
 
 // Help implements `uc help` (no arg) and `uc help <subcommand|name>`
@@ -626,6 +759,7 @@ Usage:
 Management commands:
   uc list, uc ls          List registered scripts, aliases, and functions
   uc add <path> [name] [--force]   Register a script
+  uc new <name> [--lang sh|py|js|rb|pl]   Scaffold a new script in $EDITOR
   uc remove <name>, rm    Unregister a script, alias, or function
   uc which <name>         Print what a name resolves to, and its kind
   uc edit <name>          Open a script, alias, or function in $EDITOR
