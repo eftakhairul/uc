@@ -3,17 +3,11 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# Staged pipeline: each stage gates the next, so a failure stops the run
-# instead of burning every runner in parallel.
-#
-#   test  ──▶  windows ─┐
-#              e2e      ├──▶  build (downloadable archives)
-#              vulncheck┘
-#
 jobs:
   test:
     name: Unit tests
