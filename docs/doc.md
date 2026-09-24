@@ -47,6 +47,9 @@ Add completion to your shell:
 
 # Zsh
 	eval "$(uc completion zsh)"
+
+# Fish (install once — fish autoloads it, no eval needed)
+	uc completion fish > ~/.config/fish/completions/uc.fish
 ```
 
 ## Scripts
@@ -188,7 +191,7 @@ they were used.
 
 ## Tab Completion
 
-`uc completion bash|zsh` emits a completion script. After loading it, tab
+`uc completion bash|zsh|fish` emits a completion script. After loading it, tab
 completion lists your registered names, ranked by frecency rather than
 alphabetically.
 
@@ -196,6 +199,32 @@ alphabetically.
 uc kil<TAB>
 # killport
 ```
+
+### Fish
+
+Bash and zsh load their script by `eval`ing it from your shell rc file on every
+startup. Fish instead autoloads completions on demand from a file named after
+the command, so you install it once and pay nothing at startup:
+
+```sh
+uc completion fish > ~/.config/fish/completions/uc.fish
+```
+
+The fish script also shows descriptions in the completion pager, which bash and
+zsh do not:
+
+```
+uc <TAB>
+# killport  (kills a process by port)
+# gs        (git status)
+```
+
+Descriptions come from a script's `# @desc:` tag or an alias/function's
+`--desc`. Entries without one complete as a bare name, and built-in
+subcommands (`list`, `add`, ...) show no description — their help text is
+multi-line prose. Internally, fish calls the hidden
+`uc __complete --describe <partial>`, which emits `name<TAB>description`
+lines; bash and zsh keep using the flag-less form.
 
 ## History
 
