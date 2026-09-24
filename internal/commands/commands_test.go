@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -181,5 +182,103 @@ func TestAliasAddHazardWarnsWithoutFailing(t *testing.T) {
 	}
 	if resolved.Kind != registry.KindAlias {
 		t.Errorf("resolved kind = %q, want alias", resolved.Kind)
+	}
+}
+
+func TestCompleteDescribeEmitsTabSeparatedDesc(t *testing.T) {
+	r, out := newTestRunner(t)
+	if err := os.MkdirAll(r.Cfg.ScriptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, r.Cfg.ScriptsDir, "killport", "#!/bin/sh\n# @desc: kills a port\necho hi\n")
+
+	if err := r.Complete("k", true); err != nil {
+		t.Fatalf("Complete describe: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "killport\tkills a port\n") {
+		t.Errorf("output = %q, want a tab-separated description", got)
+	}
+}
+
+// In describe mode a candidate with no description must emit a bare name, not
+// a trailing tab — fish would otherwise render an empty pager description.
+func TestCompleteDescribeOmitsTabWhenNoDesc(t *testing.T) {
+	r, out := newTestRunner(t)
+	if err := os.MkdirAll(r.Cfg.ScriptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, r.Cfg.ScriptsDir, "kbare", "#!/bin/sh\necho hi\n")
+
+	if err := r.Complete("kbare", true); err != nil {
+		t.Fatalf("Complete describe: %v", err)
+	}
+	if got := out.String(); got != "kbare\n" {
+		t.Errorf("output = %q, want %q", got, "kbare\n")
+	}
+}
+
+// Describing must not change which candidates appear, only how they print.
+func TestCompleteDescribeMatchesPlainCandidateSet(t *testing.T) {
+	r, out := newTestRunner(t)
+	if err := os.MkdirAll(r.Cfg.ScriptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, r.Cfg.ScriptsDir, "kbare", "#!/bin/sh\necho hi\n")
+	writeScript(t, r.Cfg.ScriptsDir, "killport", "#!/bin/sh\n# @desc: kills a port\necho hi\n")
+
+	if err := r.Complete("k", false); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	plain := strings.Split(strings.TrimSpace(out.String()), "\n")
+
+	out.Reset()
+	if err := r.Complete("k", true); err != nil {
+		t.Fatalf("Complete describe: %v", err)
+	}
+	var described []string
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		name, _, _ := strings.Cut(line, "\t")
+		described = append(described, name)
+	}
+
+	if !slices.Equal(plain, described) {
+		t.Errorf("described names = %v, want %v", described, plain)
+	}
+}
+
+// completion.enabled false silences both forms — the shell still calls back
+// in, but gets nothing.
+func TestCompleteDisabledPrintsNothing(t *testing.T) {
+	r, out := newTestRunner(t)
+	if err := os.MkdirAll(r.Cfg.ScriptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, r.Cfg.ScriptsDir, "killport", "#!/bin/sh\n# @desc: kills a port\necho hi\n")
+	disabled := false
+	r.Cfg.Settings.Completion.Enabled = &disabled
+
+	for _, describe := range []bool{false, true} {
+		out.Reset()
+		if err := r.Complete("k", describe); err != nil {
+			t.Fatalf("Complete(describe=%v): %v", describe, err)
+		}
+		if out.String() != "" {
+			t.Errorf("Complete(describe=%v) printed %q, want nothing", describe, out.String())
+		}
+	}
+}
+
+func TestCompleteWithoutDescribeEmitsBareName(t *testing.T) {
+	r, out := newTestRunner(t)
+	if err := os.MkdirAll(r.Cfg.ScriptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, r.Cfg.ScriptsDir, "killport", "#!/bin/sh\n# @desc: kills a port\necho hi\n")
+
+	if err := r.Complete("k", false); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got := out.String(); got != "killport\n" {
+		t.Errorf("output = %q, want %q", got, "killport\n")
 	}
 }

@@ -54,6 +54,13 @@ export PATH="$HOME/bin:$PATH"
 eval "$(uc completion bash)"   # or: uc completion zsh
 ```
 
+Fish autoloads completions instead, so install it once rather than adding
+anything to `config.fish`:
+
+```sh
+uc completion fish > ~/.config/fish/completions/uc.fish
+```
+
 ## Quick start
 
 ```sh
@@ -87,7 +94,7 @@ always tells you which kind you got.
 | `uc remove <name>` / `uc rm` | Unregister a script, alias, or function |
 | `uc which <name>` | Print what a name resolves to, and its kind |
 | `uc edit <name>` | Scripts: open in `$EDITOR`. Aliases/functions: temp-file round-trip through `$EDITOR`. |
-| `uc completion bash\|zsh` | Print a shell completion script |
+| `uc completion bash\|zsh\|fish` | Print a shell completion script |
 | `uc history [n]` | Show the last n invocations (default/max: `history_size`), with kind |
 | `uc history run <n>` | Re-run the nth history entry |
 | `uc alias add <name> <command...> [--desc "..."]` | Alias `<name>` to arbitrary shell command text |
@@ -198,9 +205,15 @@ frecency (how often and how recently you've used each one):
 
 ## Tab completion
 
-`uc completion bash|zsh` emits a thin shell function that calls back into
-`uc __complete <partial>` on every `<TAB>`, so completions are ranked by
+`uc completion bash|zsh|fish` emits a thin shell function that calls back
+into `uc __complete <partial>` on every `<TAB>`, so completions are ranked by
 frecency, not just alphabetical.
+
+Fish gets two extras: it autoloads the script from
+`~/.config/fish/completions/uc.fish` (no `eval` at shell startup), and its
+completion pager shows each candidate's description — a script's `@desc` tag
+or an alias/function's `--desc`. It gets these by calling
+`uc __complete --describe`, which emits `name<TAB>description` lines.
 
 ## History & frecency
 

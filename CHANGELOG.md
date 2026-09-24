@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `uc completion fish` emits a fish completion script. Fish autoloads it from
+  `~/.config/fish/completions/uc.fish` (no `eval` at shell startup) and shows
+  each candidate's description — a script's `@desc` tag or an alias/function's
+  `--desc` — in the completion pager. Frecency order is preserved. Bash and
+  zsh output is unchanged.
+
 ### Fixed
 
 - `.py` scripts now run where only `python` exists (Windows, minimal Linux

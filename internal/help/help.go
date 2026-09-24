@@ -52,9 +52,16 @@ Scripts: opens the file in $EDITOR. Aliases and functions: temp-file
 round-trip of the command/body through $EDITOR (same as 'uc alias edit' /
 'uc function edit').
 `,
-	"completion": `uc completion <bash|zsh>
+	"completion": `uc completion <bash|zsh|fish>
 
 Print a shell completion script to stdout, for 'eval "$(uc completion bash)"'.
+
+Fish autoloads completions instead of eval'ing them, so install it once:
+
+  uc completion fish > ~/.config/fish/completions/uc.fish
+
+The fish script also shows each candidate's description (from a script's
+'@desc' tag or an alias/function's --desc) in the completion pager.
 `,
 	"history": `uc history [n]
 uc history run <n>

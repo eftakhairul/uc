@@ -125,17 +125,22 @@ func runEdit(r *commands.Runner, args []string) error {
 
 func runCompletion(r *commands.Runner, args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("usage: uc completion <bash|zsh>")
+		return fmt.Errorf("usage: uc completion <bash|zsh|fish>")
 	}
 	return r.Completion(args[0])
 }
 
 func runComplete(r *commands.Runner, args []string) error {
+	describe := false
+	if len(args) >= 1 && args[0] == "--describe" {
+		describe = true
+		args = args[1:]
+	}
 	partial := ""
 	if len(args) >= 1 {
 		partial = args[0]
 	}
-	return r.Complete(partial)
+	return r.Complete(partial, describe)
 }
 
 func runHistory(r *commands.Runner, args []string) error {

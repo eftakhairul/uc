@@ -259,10 +259,11 @@ func (r *Runner) Completion(shell string) error {
 	return nil
 }
 
-// Complete implements the hidden `uc __complete <partial>`. With
+// Complete implements the hidden `uc __complete [--describe] <partial>`. With
 // completion.enabled false in settings.json it prints nothing — the shell
-// function still calls back in, but gets no candidates.
-func (r *Runner) Complete(partial string) error {
+// function still calls back in, but gets no candidates. When describe is set
+// (fish only), each described candidate is printed as "name<TAB>desc".
+func (r *Runner) Complete(partial string, describe bool) error {
 	if !r.Cfg.CompletionEnabled() {
 		return nil
 	}
@@ -273,12 +274,16 @@ func (r *Runner) Complete(partial string) error {
 	hour, day, week, older := r.Cfg.RecencyWeights()
 	weights := ranker.Weights{Hour: hour, Day: day, Week: week, Older: older}
 
-	names, err := completion.Candidates(r.Reg, entries, weights, partial)
+	pairs, err := completion.DescribedCandidates(r.Reg, entries, weights, partial)
 	if err != nil {
 		return err
 	}
-	for _, n := range names {
-		fmt.Fprintln(r.Out, n)
+	for _, p := range pairs {
+		if describe && p.Desc != "" {
+			fmt.Fprintf(r.Out, "%s\t%s\n", p.Name, p.Desc)
+			continue
+		}
+		fmt.Fprintln(r.Out, p.Name)
 	}
 	return nil
 }
@@ -624,7 +629,7 @@ Management commands:
   uc remove <name>, rm    Unregister a script, alias, or function
   uc which <name>         Print what a name resolves to, and its kind
   uc edit <name>          Open a script, alias, or function in $EDITOR
-  uc completion <shell>   Print a completion script (bash|zsh)
+  uc completion <shell>   Print a completion script (bash|zsh|fish)
   uc history [n]          Show the last n invocations (default: history_size)
   uc history run <n>      Re-run the nth history entry
   uc alias add <name> <command...> [--desc "..."]   Create an alias to a shell command
