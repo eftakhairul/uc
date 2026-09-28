@@ -74,6 +74,17 @@ $ uc killport 8080
 would kill port 8080
 ```
 
+Sharing a script? `uc add` also takes a URL — a raw file or a gist — and
+downloads it into the registry (up to 1 MB, never run automatically):
+
+```sh
+$ uc add https://raw.githubusercontent.com/you/dotfiles/main/killport.sh
+added https://raw.githubusercontent.com/you/dotfiles/main/killport.sh -> /Users/you/.uc/scripts/killport.sh
+note: review it before first run — uc which killport
+
+$ uc add https://gist.github.com/you/abc123 killport   # gist page -> /raw; name it yourself
+```
+
 Starting from scratch instead of an existing file? `uc new killport` opens a
 pre-filled template in `$EDITOR` that's already inside the registry, so
 saving it *is* registering it.
@@ -94,7 +105,7 @@ always tells you which kind you got.
 | `uc <name> [args...]` | Run a registered script, alias, or function |
 | `uc` *(no args)* | Launch the interactive fuzzy picker |
 | `uc list` / `uc ls` | List scripts + aliases + functions, with kind and description |
-| `uc add <path> [name] [--force]` | Register a script (copies it in, sets +x). Refuses to overwrite or create an ambiguous name unless `--force` |
+| `uc add <path\|url> [name] [--force]` | Register a script (copies it in, sets +x). An `http(s)://` URL is downloaded instead (gist page URLs fetch via `/raw`). Refuses to overwrite or create an ambiguous name unless `--force` |
 | `uc new <name> [--lang sh\|py\|js\|rb\|pl]` | Scaffold a new script in `$EDITOR`, already registered (default lang: `sh`) |
 | `uc remove <name>` / `uc rm` | Unregister a script, alias, or function |
 | `uc which <name>` | Print what a name resolves to, and its kind |

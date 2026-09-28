@@ -26,12 +26,21 @@ kind and description (if any), sorted by name.
 Enumerate every registered script, alias, and function together, with its
 kind and description (if any), sorted by name.
 `,
-	"add": `uc add <path> [name] [--force]
+	"add": `uc add <path|url> [name] [--force]
 
 Register a script: copies <path> into $UC_HOME/scripts/<name or
 basename(path)> and sets its executable bit. Fails if the name already
 exists or would be ambiguous with another registered script; pass --force
 to overwrite anyway.
+
+An http:// or https:// source is downloaded instead (up to 1 MB). The name
+defaults to the last segment of the URL path. A gist page URL
+(gist.github.com/<user>/<id>) fetches the gist's first file via /raw; it
+has no file name to derive from, so pass one explicitly.
+
+Use raw file URLs (e.g. raw.githubusercontent.com/...), not repository
+web pages — uc does not inspect what it downloads, and never runs it on
+its own. Review a downloaded script before its first run.
 `,
 	"new": `uc new <name> [--lang sh|py|js|rb|pl]
 
