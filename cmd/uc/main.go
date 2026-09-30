@@ -95,7 +95,7 @@ func runAdd(r *commands.Runner, args []string) error {
 		rest = append(rest, a)
 	}
 	if len(rest) < 1 || len(rest) > 2 {
-		return fmt.Errorf("usage: uc add <path> [name] [--force]")
+		return fmt.Errorf("usage: uc add <path|url> [name] [--force]")
 	}
 	name := ""
 	if len(rest) == 2 {

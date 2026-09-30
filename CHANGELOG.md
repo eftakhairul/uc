@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `uc add <url> [name] [--force]` registers a script straight from an
+  `http://` or `https://` URL. The name defaults to the last URL path
+  segment; a gist page URL (`gist.github.com/<user>/<id>`) fetches the gist's
+  first file via `/raw` and needs an explicit name. The same name,
+  overwrite, and ambiguity guards as a local add run before anything is
+  downloaded. Downloads are capped at 1 MB, must return 200 with a non-empty
+  body, and follow redirects. uc prints a reminder to review the script
+  before its first run and never runs it on its own.
+- `uc add` now installs scripts atomically (temp file + rename), for local
+  paths as well as URLs. A failed copy or download leaves no partial file
+  behind and never destroys the script that `--force` was replacing.
+
 - `uc new <name> [--lang sh|py|js|rb|pl]` scaffolds a script: it writes a
   template (shebang plus an empty `@desc`/`@usage`/`@example` block) directly
   into `$UC_HOME/scripts/` and opens `$EDITOR` on it, so saving the file

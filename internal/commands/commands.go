@@ -4,11 +4,15 @@
 package commands
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -115,8 +119,14 @@ func validScriptName(name string) error {
 	return nil
 }
 
-// Add implements `uc add <path> [name] [--force]`.
+// Add implements `uc add <path|url> [name] [--force]`. An http:// or
+// https:// source is downloaded instead of copied; both paths share the
+// same name validation and overwrite/ambiguity guards.
 func (r *Runner) Add(srcPath, name string, force bool) error {
+	if isURL(srcPath) {
+		return r.addFromURL(srcPath, name, force)
+	}
+
 	info, err := os.Stat(srcPath)
 	if err != nil {
 		return fmt.Errorf("%s: %w", srcPath, err)
@@ -128,38 +138,9 @@ func (r *Runner) Add(srcPath, name string, force bool) error {
 	if name == "" {
 		name = filepath.Base(srcPath)
 	}
-	if err := validScriptName(name); err != nil {
+	destPath, err := r.prepareAddDest(name, force)
+	if err != nil {
 		return err
-	}
-	// Reserved subcommands always win at dispatch, so a script registered
-	// under one would be unrunnable — reject up front, same as alias/function
-	// add. Checked on the bare name since that's what's typed to invoke it.
-	if reserved.Is(registry.BareName(name)) {
-		return fmt.Errorf("%q is a reserved subcommand name", registry.BareName(name))
-	}
-
-	if err := r.Cfg.EnsureDirs(); err != nil {
-		return err
-	}
-
-	destPath := filepath.Join(r.Cfg.ScriptsDir, name)
-	if !force {
-		if _, err := os.Stat(destPath); err == nil {
-			return fmt.Errorf("%s already exists — pass --force to overwrite, or remove it with `uc remove %s`",
-				destPath, registry.BareName(name))
-		}
-		// A same-named script under another extension would make the bare
-		// name ambiguous at invocation time (script resolution tries every
-		// known extension) — reject that too.
-		existing, err := r.Reg.ResolveScript(registry.BareName(name))
-		if err == nil && existing != destPath {
-			return fmt.Errorf("%q would be ambiguous with %s — remove it first or pass --force",
-				registry.BareName(name), existing)
-		}
-		if _, ok := errors.AsType[*registry.AmbiguousNameError](err); ok {
-			return fmt.Errorf("%q is already ambiguous — remove one of the existing scripts first or pass --force: %w",
-				registry.BareName(name), err)
-		}
 	}
 
 	src, err := os.Open(srcPath)
@@ -168,20 +149,190 @@ func (r *Runner) Add(srcPath, name string, force bool) error {
 	}
 	defer src.Close()
 
-	dst, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", destPath, err)
-	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, src); err != nil {
+	if err := installScript(destPath, src); err != nil {
 		return fmt.Errorf("copy %s -> %s: %w", srcPath, destPath, err)
-	}
-	if err := dst.Chmod(0o755); err != nil {
-		return fmt.Errorf("chmod %s: %w", destPath, err)
 	}
 
 	fmt.Fprintf(r.Out, "added %s -> %s\n", srcPath, destPath)
+	return nil
+}
+
+// prepareAddDest validates name as a script name, ensures the uc dirs
+// exist, and — unless force — refuses to overwrite an existing script or
+// make its bare name ambiguous. It returns where the script should be
+// written.
+func (r *Runner) prepareAddDest(name string, force bool) (string, error) {
+	if err := validScriptName(name); err != nil {
+		return "", err
+	}
+	// Reserved subcommands always win at dispatch, so a script registered
+	// under one would be unrunnable — reject up front, same as alias/function
+	// add. Checked on the bare name since that's what's typed to invoke it.
+	if reserved.Is(registry.BareName(name)) {
+		return "", fmt.Errorf("%q is a reserved subcommand name", registry.BareName(name))
+	}
+
+	if err := r.Cfg.EnsureDirs(); err != nil {
+		return "", err
+	}
+
+	destPath := filepath.Join(r.Cfg.ScriptsDir, name)
+	if !force {
+		if _, err := os.Stat(destPath); err == nil {
+			return "", fmt.Errorf("%s already exists — pass --force to overwrite, or remove it with `uc remove %s`",
+				destPath, registry.BareName(name))
+		}
+		// A same-named script under another extension would make the bare
+		// name ambiguous at invocation time (script resolution tries every
+		// known extension) — reject that too.
+		existing, err := r.Reg.ResolveScript(registry.BareName(name))
+		if err == nil && existing != destPath {
+			return "", fmt.Errorf("%q would be ambiguous with %s — remove it first or pass --force",
+				registry.BareName(name), existing)
+		}
+		if _, ok := errors.AsType[*registry.AmbiguousNameError](err); ok {
+			return "", fmt.Errorf("%q is already ambiguous — remove one of the existing scripts first or pass --force: %w",
+				registry.BareName(name), err)
+		}
+	}
+	return destPath, nil
+}
+
+// installScript writes src to destPath with mode 0o755 via a temp file in
+// the same directory plus rename, so a failed copy or download never leaves
+// a partial script behind — or destroys the one --force was replacing.
+// CreateTemp makes the file 0o600; Chmod (unaffected by umask) sets 0o755.
+func installScript(destPath string, src io.Reader) (err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(destPath), "."+filepath.Base(destPath)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+		}
+	}()
+	if _, err = io.Copy(tmp, src); err != nil {
+		return err
+	}
+	if err = tmp.Chmod(0o755); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), destPath)
+}
+
+// maxFetchBytes caps how much `uc add <url>` downloads — scripts are small,
+// and anything bigger is almost certainly the wrong URL.
+const maxFetchBytes = 1 << 20
+
+// httpClient fetches scripts for `uc add <url>`. Redirects are followed
+// (gist.github.com/.../raw redirects to gist.githubusercontent.com).
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// isURL reports whether an `uc add` source should be downloaded rather
+// than read from disk.
+func isURL(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+}
+
+// rawURL turns a user-supplied URL into the one to download: a
+// gist.github.com page URL gets "/raw" appended (which serves the gist's
+// first file); every other http(s) URL passes through unchanged.
+func rawURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL %q: %w", raw, err)
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("invalid URL %q: want an http:// or https:// URL with a host", raw)
+	}
+	if strings.EqualFold(u.Hostname(), "gist.github.com") &&
+		!strings.HasSuffix(u.Path, "/raw") && !strings.Contains(u.Path, "/raw/") {
+		u.Path = strings.TrimSuffix(u.Path, "/") + "/raw"
+		u.RawPath = ""
+	}
+	return u.String(), nil
+}
+
+// nameFromURL derives a script name from the last path segment of a
+// (rewritten) URL. Query strings and fragments are ignored by construction.
+func nameFromURL(fetchURL string) (string, error) {
+	u, err := url.Parse(fetchURL)
+	if err != nil {
+		return "", err
+	}
+	name := path.Base(u.Path)
+	switch name {
+	case "", "/", ".", "raw":
+		return "", fmt.Errorf("cannot derive a name from this URL, pass one explicitly: uc add <url> <name>")
+	}
+	return name, nil
+}
+
+// fetchScript downloads fetchURL, requiring a 200 response and a
+// non-empty body no larger than maxFetchBytes.
+func fetchScript(fetchURL string) ([]byte, error) {
+	resp, err := httpClient.Get(fetchURL)
+	if err != nil {
+		// *url.Error repeats the method and URL; unwrap it so the URL
+		// appears once.
+		if uerr, ok := errors.AsType[*url.Error](err); ok {
+			err = uerr.Err
+		}
+		return nil, fmt.Errorf("fetch %s: %w", fetchURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch %s: %s", fetchURL, resp.Status)
+	}
+	// Read one byte past the cap so an oversized body is an error rather
+	// than a silently truncated (and likely broken) script.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", fetchURL, err)
+	}
+	if len(body) > maxFetchBytes {
+		return nil, fmt.Errorf("fetch %s: response is larger than %d bytes", fetchURL, maxFetchBytes)
+	}
+	if len(body) == 0 {
+		return nil, fmt.Errorf("fetch %s: empty response", fetchURL)
+	}
+	return body, nil
+}
+
+// addFromURL implements the URL form of `uc add`. The name and overwrite
+// guards run before the download, so a doomed add costs no network round
+// trip, and nothing is written unless the fetch fully succeeds.
+func (r *Runner) addFromURL(rawurl, name string, force bool) error {
+	fetchURL, err := rawURL(rawurl)
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		if name, err = nameFromURL(fetchURL); err != nil {
+			return err
+		}
+	}
+	destPath, err := r.prepareAddDest(name, force)
+	if err != nil {
+		return err
+	}
+
+	body, err := fetchScript(fetchURL)
+	if err != nil {
+		return err
+	}
+	if err := installScript(destPath, bytes.NewReader(body)); err != nil {
+		return fmt.Errorf("write %s: %w", destPath, err)
+	}
+
+	fmt.Fprintf(r.Out, "added %s -> %s\n", rawurl, destPath)
+	fmt.Fprintf(r.Out, "note: review it before first run — uc which %s\n", registry.BareName(name))
 	return nil
 }
 
@@ -758,7 +909,7 @@ Usage:
 
 Management commands:
   uc list, uc ls          List registered scripts, aliases, and functions
-  uc add <path> [name] [--force]   Register a script
+  uc add <path|url> [name] [--force]   Register a script (local file or http(s) URL)
   uc new <name> [--lang sh|py|js|rb|pl]   Scaffold a new script in $EDITOR
   uc remove <name>, rm    Unregister a script, alias, or function
   uc which <name>         Print what a name resolves to, and its kind

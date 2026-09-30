@@ -20,6 +20,10 @@ import (
 
 const containerBinPath = "/usr/local/bin/uc"
 
+// fakeHTTPRoot is the directory fakehttp serves at http://127.0.0.1/ inside
+// the container; tests stage "remote" scripts there with writeFile.
+const fakeHTTPRoot = "/srv/uc-e2e"
+
 var container testcontainers.Container
 
 func TestMain(m *testing.M) {
@@ -38,13 +42,20 @@ func runMain(m *testing.M) int {
 
 	req := testcontainers.ContainerRequest{
 		Image: "debian:bookworm-slim",
-		Cmd:   []string{"sleep", "infinity"},
+		// fakehttp is the container's main process: it keeps the container
+		// alive (as `sleep infinity` used to) and serves fakeHTTPRoot on
+		// port 80 for the `uc add <url>` tests.
+		Cmd: []string{"/usr/local/bin/fakehttp", "-addr", ":80", "-root", fakeHTTPRoot},
 		Files: []testcontainers.ContainerFile{
 			{HostFilePath: filepath.Join(artifactsDir, "uc"), ContainerFilePath: containerBinPath, FileMode: 0o755},
 			{HostFilePath: filepath.Join(artifactsDir, "fake-editor"), ContainerFilePath: "/usr/local/bin/fake-editor", FileMode: 0o755},
 			{HostFilePath: filepath.Join(artifactsDir, "fake-editor-fail"), ContainerFilePath: "/usr/local/bin/fake-editor-fail", FileMode: 0o755},
+			{HostFilePath: filepath.Join(artifactsDir, "fakehttp"), ContainerFilePath: "/usr/local/bin/fakehttp", FileMode: 0o755},
 		},
-		WaitingFor: wait.ForExec([]string{containerBinPath, "version"}),
+		WaitingFor: wait.ForAll(
+			wait.ForExec([]string{containerBinPath, "version"}),
+			wait.ForLog("fakehttp: listening"),
+		),
 	}
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
@@ -64,20 +75,26 @@ func runMain(m *testing.M) int {
 	return m.Run()
 }
 
-// buildArtifacts cross-compiles uc for linux/amd64 and writes the fake
-// editor scripts used by the alias/function edit tests, all into one temp
-// dir ready to be copied into the container.
+// buildArtifacts cross-compiles uc and the fakehttp server for
+// linux/amd64 and writes the fake editor scripts used by the
+// alias/function edit tests, all into one temp dir ready to be copied into
+// the container.
 func buildArtifacts() (string, error) {
 	dir, err := os.MkdirTemp("", "uc-e2e-artifacts")
 	if err != nil {
 		return "", err
 	}
 
-	cmd := exec.Command("go", "build", "-o", filepath.Join(dir, "uc"), "github.com/eftakhairul/uc/cmd/uc")
-	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
-	if out, buildErr := cmd.CombinedOutput(); buildErr != nil {
-		os.RemoveAll(dir)
-		return "", fmt.Errorf("build linux uc binary: %w\n%s", buildErr, out)
+	for _, b := range []struct{ out, pkg string }{
+		{"uc", "github.com/eftakhairul/uc/cmd/uc"},
+		{"fakehttp", "github.com/eftakhairul/uc/e2e/fakehttp"},
+	} {
+		cmd := exec.Command("go", "build", "-tags", "e2e", "-o", filepath.Join(dir, b.out), b.pkg)
+		cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
+		if out, buildErr := cmd.CombinedOutput(); buildErr != nil {
+			os.RemoveAll(dir)
+			return "", fmt.Errorf("build linux %s binary: %w\n%s", b.out, buildErr, out)
+		}
 	}
 
 	// The fake editor writes $EDITOR_NEW_CONTENT to whatever path it's

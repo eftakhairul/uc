@@ -42,3 +42,11 @@ uc-ARCHITECTURE.md
 # vendored packages like moby/moby/api/types/build and break -mod=vendor.
 !vendor/
 !vendor/**
+
+# Playwright
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/

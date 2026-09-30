@@ -74,6 +74,35 @@ overwriting. Re-register a script deliberately with `--force`:
 uc add ~/scripts/killport.sh killport --force
 ```
 
+### Add a script from a URL
+
+Pass an `http://` or `https://` URL instead of a path and `uc` downloads the
+script (up to 1 MB) and registers it:
+
+```sh
+uc add https://raw.githubusercontent.com/you/dotfiles/main/killport.sh
+# added https://raw.githubusercontent.com/you/dotfiles/main/killport.sh -> /Users/you/.uc/scripts/killport.sh
+# note: review it before first run — uc which killport
+```
+
+The name defaults to the last segment of the URL path (query strings and
+fragments are ignored); pass one explicitly to override it. A gist page URL
+fetches the gist's first file through `/raw`. It has no file name to derive
+a name from, so name it yourself:
+
+```sh
+uc add https://gist.github.com/you/abc123 killport
+```
+
+A URL install follows the same rules as a local one: an existing or
+ambiguous name is refused unless you pass `--force`. Those checks run before
+anything is downloaded, and nothing is written unless the download succeeds.
+Redirects are followed.
+
+`uc` never runs what it downloads on its own, and it doesn't inspect the
+content either. Use raw file URLs, not repository web pages, and read the
+script (`uc which <name>` prints its path) before its first run.
+
 ### Create a script from scratch
 
 When there's no file yet, `uc new` skips the write-it-then-add-it dance: it

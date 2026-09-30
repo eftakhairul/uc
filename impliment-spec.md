@@ -6,7 +6,7 @@ independently green `feat:` commit.
 
 1. [Fish shell completion](#1-fish-shell-completion) — **shipped**
 2. [`uc new` — scaffold a script](#2-uc-new--scaffold-a-script) — **shipped**
-3. [`uc add <url>` — register from a URL/gist](#3-uc-add-url--register-from-a-urlgist) ← **next**
+3. [`uc add <url>` — register from a URL/gist](#3-uc-add-url--register-from-a-urlgist) — **implemented** (`feature/add-url`, in review)
 4. [`uc stats` + `uc history search`](#4-uc-stats--uc-history-search)
 5. [Tags](#5-tags)
 6. [Env injection](#6-env-injection)
@@ -406,7 +406,12 @@ In `commands_test.go`, using `httptest.NewServer` (no network):
 - `rawURL` table test: gist page URL → `/raw` appended; gist URL already
   containing `/raw/` unchanged; non-gist URL unchanged; invalid URL errors.
 
-No e2e (would need network); the unit coverage is the contract.
+E2E coverage without real network access: the Linux suite runs
+`e2e/fakehttp` (a static file server, `/redirect/` and `/status/` routes) as
+the test container's main process on port 80, and maps `gist.github.com` to
+`127.0.0.1` in the container's `/etc/hosts` to exercise the gist rewrite end
+to end (`e2e/add_url_test.go`). The Windows suite runs uc.exe natively and
+uses an in-process `httptest` server (`e2e/add_url_windows_test.go`).
 
 ---
 
