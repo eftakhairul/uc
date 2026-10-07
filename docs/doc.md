@@ -15,7 +15,8 @@ aliases, and shell functions. Register something once, then run it from anywhere
 8. [Listing and Inspecting](#listing-and-inspecting)
 9. [Editing](#editing)
 10. [Removing](#removing)
-11. [Configuration](#configuration)
+11. [Sync Across Machines](#sync-across-machines)
+12. [Configuration](#configuration)
 
 ## Installation
 
@@ -378,6 +379,95 @@ uc remove killport
 uc rm gs
 uc rm shiplt
 ```
+
+## Sync Across Machines
+
+`uc sync` syncs your scripts, aliases, and functions between machines
+through a git remote you own. `uc` just runs `git` — there is no hosted
+service — so `git` must be on your `PATH`, and its usual authentication
+(SSH keys, credential helpers) applies.
+
+> Use a **private** repository. Scripts and alias commands can contain
+> tokens and hostnames you don't want public.
+
+### Set it up
+
+Create an empty private repo, then on the machine that has your scripts:
+
+```sh
+uc sync init git@github.com:you/uc-sync.git
+# + scripts/killport
+# + aliases.json
+# pushed initial state to git@github.com:you/uc-sync.git
+```
+
+On every other machine, run the same command. Because the remote already
+has state, it is pulled in instead:
+
+```sh
+uc sync init git@github.com:you/uc-sync.git
+# pulled existing state from git@github.com:you/uc-sync.git
+uc killport 8080   # works right away
+```
+
+If that machine already has its own, different scripts, `init` stops
+rather than overwrite them. Run `uc sync pull --force` to replace them with
+the remote's, or `uc sync push` to replace the remote's with them.
+
+### Push and pull
+
+```sh
+uc sync push     # make the remote match this machine
+uc sync pull     # make this machine match the remote
+```
+
+Both are mirrors: a script you add, edit, or **remove** on one machine is
+added, edited, or removed on the other. The output lists each file:
+`+` added, `~` changed, `-` deleted.
+
+What syncs, and what doesn't:
+
+| Synced | Not synced |
+|---|---|
+| `$UC_HOME/scripts/` | `history.json` (per-machine usage) |
+| `aliases.json` | `settings.json` (per-machine, e.g. `editor`) |
+| `functions.json` | dotfiles and subdirectories inside `scripts/` |
+
+### Check where you are
+
+```sh
+uc sync status
+# remote: git@github.com:you/uc-sync.git
+# local changes not yet pushed:
+#   + scripts/deploy
+# 0 commit(s) to push, 1 to pull
+```
+
+`status` works offline too — it warns and compares against the last
+fetched state.
+
+### When two machines change things
+
+- **Pull refuses to lose work.** If this machine has changes you haven't
+  pushed, `uc sync pull` lists them and stops. Push them first, or run
+  `uc sync pull --force` to discard them.
+- **Push after someone else pushed.** `uc sync push` fails with
+  `remote has newer changes — run uc sync pull first`. Your changes are
+  already committed locally, so `uc sync pull` replays them on top of the
+  remote's, then `uc sync push` publishes the result. Edits to *different*
+  files from both machines are all kept.
+- **Same file edited on both.** Pull stops with `sync repo has diverged`.
+  Resolve it with git in `$UC_HOME/sync` (`git pull --rebase`, fix the
+  file, `git add` it, `git rebase --continue`), then run
+  `uc sync pull --force` to apply the result and `uc sync push` to
+  publish it.
+
+### How it's stored
+
+The remote is cloned into `$UC_HOME/sync`, laid out as `scripts/`,
+`aliases.json`, and `functions.json`. Your live files stay where they
+always are; `uc sync` copies between them and that clone. The remote URL
+lives in the clone's own git config — there is no `settings.json` key.
 
 ## Configuration
 

@@ -121,6 +121,10 @@ always tells you which kind you got.
 | `uc function remove <name>` | Delete a function |
 | `uc function list` | List functions only |
 | `uc function edit <name>` | Edit a function's body in `$EDITOR` |
+| `uc sync init <remote-url>` | Set up git-backed sync with a remote you own (adopts its state, or pushes yours if it's empty) |
+| `uc sync push` | Publish this machine's scripts, aliases, and functions |
+| `uc sync pull [--force]` | Adopt the remote's state; refuses while you have unpushed changes unless `--force` |
+| `uc sync status` | Show the remote, unpushed local changes, and commits to push/pull |
 | `uc help` | Show usage |
 | `uc help <subcommand\|name>` | Help for a subcommand, or a script/alias/function's `@desc`/`@usage`/`@example` |
 | `uc <name> --help` / `uc <name> -h` | Shortcut for `uc help <name>`, only when it's the sole argument |
@@ -252,6 +256,37 @@ is computed on `name` alone, regardless of what it resolves to:
 | < 1 week ago | 2× |
 | older / not in the window | 1× |
 
+## Sync across machines
+
+`uc sync` keeps scripts, aliases, and functions in step across machines
+through a git remote **you** own — there's no hosted backend, just `git` on
+`PATH`. Use a **private** repo: scripts can contain secrets.
+
+```sh
+# machine A (has your scripts)
+$ uc sync init git@github.com:you/uc-sync.git
++ scripts/killport
++ aliases.json
+pushed initial state to git@github.com:you/uc-sync.git
+
+# machine B (fresh)
+$ uc sync init git@github.com:you/uc-sync.git
+pulled existing state from git@github.com:you/uc-sync.git
+
+# later: change things on A, then
+$ uc sync push        # on A
+$ uc sync pull        # on B
+```
+
+Push makes the remote match this machine and pull makes this machine match
+the remote — additions, edits, and deletions all propagate. `history.json`
+and `settings.json` are per-machine and never synced. If another machine
+pushed first, `uc sync push` tells you to pull first; pull then replays your
+commit on top, keeping edits to different files from both machines. If both
+edited the same file, pull stops and asks you to resolve it with git in
+`$UC_HOME/sync`. A plain `uc sync pull` refuses to discard changes you
+haven't pushed; `--force` does so deliberately.
+
 ## File layout
 
 ```
@@ -262,7 +297,8 @@ $XDG_CONFIG_HOME/uc/
 
 ~/.uc/                              # $UC_HOME, overridable via env var
 ├── scripts/                        # every registered script, flat
-└── history.json                    # last history_size invocations (25 by default)
+├── history.json                    # last history_size invocations (25 by default)
+└── sync/                           # `uc sync` staging clone of your remote (once set up)
 ```
 
 `$UC_HOME` defaults to `~/.uc`. `settings.json` is never created

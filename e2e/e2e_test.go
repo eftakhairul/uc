@@ -72,7 +72,28 @@ func runMain(m *testing.M) int {
 	}()
 	container = c
 
+	// `uc sync` shells out to git, which bookworm-slim doesn't ship.
+	if err := installGit(ctx, c); err != nil {
+		fmt.Fprintf(os.Stderr, "e2e: %v\n", err)
+		return 1
+	}
+
 	return m.Run()
+}
+
+// installGit installs git into the container for the `uc sync` tests.
+func installGit(ctx context.Context, c testcontainers.Container) error {
+	code, reader, err := c.Exec(ctx, []string{"sh", "-c",
+		"apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends git >/dev/null"},
+		tcexec.Multiplexed())
+	if err != nil {
+		return fmt.Errorf("install git: %w", err)
+	}
+	if code != 0 {
+		out, _ := io.ReadAll(reader)
+		return fmt.Errorf("install git: exit %d\n%s", code, out)
+	}
+	return nil
 }
 
 // buildArtifacts cross-compiles uc and the fakehttp server for
@@ -122,7 +143,19 @@ func buildArtifacts() (string, error) {
 // sharing one container.
 func sandbox(t *testing.T) []string {
 	t.Helper()
-	root := "/tmp/uc-e2e/" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
+	return sandboxAt(t, sandboxRoot(t))
+}
+
+// sandboxRoot is the per-test directory sandbox uses; tests needing more
+// than one isolated uc installation (e.g. two sync machines) put extra
+// sandboxes underneath it with sandboxAt.
+func sandboxRoot(t *testing.T) string {
+	return "/tmp/uc-e2e/" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
+}
+
+// sandboxAt is sandbox rooted at an explicit directory.
+func sandboxAt(t *testing.T, root string) []string {
+	t.Helper()
 	_, code := execIn(t, nil, "mkdir", "-p", root)
 	require.Zerof(t, code, "mkdir sandbox %s: nonzero exit", root)
 	return []string{

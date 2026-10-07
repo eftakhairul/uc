@@ -125,6 +125,11 @@ func (c *Config) FunctionsPath() string {
 	return filepath.Join(c.ConfigDir, "functions.json")
 }
 
+// SyncDir returns the path to the `uc sync` staging repo.
+func (c *Config) SyncDir() string {
+	return filepath.Join(c.UCHome, "sync")
+}
+
 // HistorySize returns the configured history cap.
 func (c *Config) HistorySize() int {
 	if c.Settings.HistorySize != nil {

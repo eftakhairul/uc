@@ -23,6 +23,7 @@ import (
 	"github.com/eftakhairul/uc/internal/config"
 	"github.com/eftakhairul/uc/internal/executor"
 	"github.com/eftakhairul/uc/internal/functions"
+	"github.com/eftakhairul/uc/internal/gitsync"
 	"github.com/eftakhairul/uc/internal/help"
 	"github.com/eftakhairul/uc/internal/history"
 	"github.com/eftakhairul/uc/internal/ranker"
@@ -925,10 +926,34 @@ Management commands:
   uc function remove <name>   Delete a function
   uc function list        List functions only
   uc function edit <name> Edit a function's body in $EDITOR
+  uc sync init <remote-url>   Set up git-backed sync with a remote you own
+  uc sync push            Publish local scripts/aliases/functions
+  uc sync pull [--force]  Adopt the remote's scripts/aliases/functions
+  uc sync status          Show the remote, unpushed changes, ahead/behind
   uc help                 Show this help
   uc help <subcommand|name>   Help for a subcommand, script, alias, or function
   uc version               Print version
 `
+
+// SyncInit implements `uc sync init <remote-url>`.
+func (r *Runner) SyncInit(remoteURL string) error {
+	return gitsync.New(r.Cfg, r.Out).Init(remoteURL)
+}
+
+// SyncPush implements `uc sync push`.
+func (r *Runner) SyncPush() error {
+	return gitsync.New(r.Cfg, r.Out).Push()
+}
+
+// SyncPull implements `uc sync pull [--force]`.
+func (r *Runner) SyncPull(force bool) error {
+	return gitsync.New(r.Cfg, r.Out).Pull(force)
+}
+
+// SyncStatus implements `uc sync status`.
+func (r *Runner) SyncStatus() error {
+	return gitsync.New(r.Cfg, r.Out).Status()
+}
 
 // PrintVersion implements `uc version`.
 func (r *Runner) PrintVersion() error {

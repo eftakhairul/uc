@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `uc sync init|push|pull|status` syncs scripts, aliases, and functions
+  across machines through a git remote you own (uc shells out to `git`; no
+  hosted backend). The remote is cloned into `$UC_HOME/sync`. `init` adopts
+  a remote that already has state, or pushes this machine's state to an
+  empty one. Push and pull are mirrors, so deletions propagate too.
+  `history.json` and `settings.json` are never synced. Pull refuses to
+  discard unpushed local changes unless given `--force`, and replays a
+  rejected push's commit on top of the remote's, so non-conflicting edits
+  from two machines are both kept. `sync` is now a reserved subcommand
+  name, so it wins over a script of the same name (minor breaking change).
 - `uc add <url> [name] [--force]` registers a script straight from an
   `http://` or `https://` URL. The name defaults to the last URL path
   segment; a gist page URL (`gist.github.com/<user>/<id>`) fetches the gist's

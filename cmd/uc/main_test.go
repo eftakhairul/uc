@@ -80,3 +80,35 @@ func TestRunAddURLWithForceAnywhere(t *testing.T) {
 		}
 	}
 }
+
+func TestRunSyncUsage(t *testing.T) {
+	r, _ := newTestRunner(t)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "usage: uc sync <init|push|pull|status> ..."},
+		{[]string{"bogus"}, "usage: uc sync <init|push|pull|status> ..."},
+		{[]string{"init"}, "usage: uc sync init <remote-url>"},
+		{[]string{"init", "a", "b"}, "usage: uc sync init <remote-url>"},
+		{[]string{"push", "x"}, "usage: uc sync push"},
+		{[]string{"pull", "x"}, "usage: uc sync pull [--force]"},
+		{[]string{"pull", "--force", "x"}, "usage: uc sync pull [--force]"},
+		{[]string{"status", "x"}, "usage: uc sync status"},
+	} {
+		err := runSync(r, tc.args)
+		if err == nil || err.Error() != tc.want {
+			t.Errorf("runSync(%q) error = %v, want %q", tc.args, err, tc.want)
+		}
+	}
+}
+
+func TestRunSyncBeforeInit(t *testing.T) {
+	r, _ := newTestRunner(t)
+	for _, args := range [][]string{{"push"}, {"pull"}, {"pull", "--force"}, {"status"}} {
+		err := runSync(r, args)
+		if err == nil || !strings.Contains(err.Error(), "uc sync init") {
+			t.Errorf("runSync(%q) error = %v, want 'run uc sync init' hint", args, err)
+		}
+	}
+}
