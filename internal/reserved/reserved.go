@@ -19,6 +19,7 @@ var Names = []string{
 	"history",
 	"alias",
 	"function",
+	"sync",
 	"help",
 	"version",
 	"__complete",

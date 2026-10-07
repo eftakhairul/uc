@@ -1047,3 +1047,23 @@ func TestAddLeavesNoTempFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestHelpSync(t *testing.T) {
+	r, out := newTestRunner(t)
+	if err := r.Help("sync"); err != nil {
+		t.Fatalf("Help(sync): %v", err)
+	}
+	for _, want := range []string{"uc sync init <remote-url>", "PRIVATE", "history.json", "--force"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("help sync = %q, want it to mention %q", out.String(), want)
+		}
+	}
+
+	out.Reset()
+	if err := r.Help(""); err != nil {
+		t.Fatalf("Help(): %v", err)
+	}
+	if !strings.Contains(out.String(), "uc sync push") {
+		t.Errorf("overall help = %q, want the sync commands listed", out.String())
+	}
+}

@@ -117,6 +117,36 @@ A function is a named, inline shell snippet run via 'bash -c'. Useful for
 chaining multiple 'uc' commands together, e.g.
 'uc build && uc test && uc deploy'.
 `,
+	"sync": `uc sync init <remote-url>
+uc sync push
+uc sync pull [--force]
+uc sync status
+
+Sync scripts, aliases, and functions across machines through a git remote
+you own (use a PRIVATE repo — scripts may contain secrets). uc shells out
+to git; there is no hosted backend, and git must be on PATH.
+
+The remote is cloned into $UC_HOME/sync, laid out as:
+
+  scripts/        mirror of $UC_HOME/scripts
+  aliases.json    copy of $XDG_CONFIG_HOME/uc/aliases.json
+  functions.json  copy of $XDG_CONFIG_HOME/uc/functions.json
+
+history.json and settings.json are per-machine and never synced.
+
+'uc sync init' clones the remote. If it already holds state, that state is
+pulled onto this machine; if it's empty, this machine's state is pushed.
+
+'uc sync push' makes the remote match this machine — additions, edits,
+and deletions all propagate. 'uc sync pull' makes this machine match the
+remote. Pull refuses while this machine has unpushed changes; --force
+discards them and adopts the remote's state.
+
+Conflicts: if another machine pushed first, push fails — run 'uc sync
+pull', then push again. Edits to different files from both machines are
+kept; if both edited the same file, pull stops and asks you to resolve it
+with git in $UC_HOME/sync, then run 'uc sync pull --force'.
+`,
 	"help": `uc help [subcommand|name]
 
 With no argument, print the overall usage. With an argument, print help for

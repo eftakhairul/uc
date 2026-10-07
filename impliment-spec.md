@@ -6,11 +6,11 @@ independently green `feat:` commit.
 
 1. [Fish shell completion](#1-fish-shell-completion) — **shipped**
 2. [`uc new` — scaffold a script](#2-uc-new--scaffold-a-script) — **shipped**
-3. [`uc add <url>` — register from a URL/gist](#3-uc-add-url--register-from-a-urlgist) — **implemented** (`feature/add-url`, in review)
+3. [`uc add <url>` — register from a URL/gist](#3-uc-add-url--register-from-a-urlgist) — **shipped** (PR #10)
 4. [`uc stats` + `uc history search`](#4-uc-stats--uc-history-search)
 5. [Tags](#5-tags)
 6. [Env injection](#6-env-injection)
-7. [`uc sync` — git-backed sync](#7-uc-sync--git-backed-sync-no-server)
+7. [`uc sync` — git-backed sync](#7-uc-sync--git-backed-sync-no-server) — **implemented** (`feature/sync`)
 
 **Previously out of scope, now fixed — no bug work is pending here.** Both
 items (the Windows `syscall.Exec` stub that made every `uc <name>` fail at
@@ -679,6 +679,23 @@ docs/doc.md (Metadata + Aliases/Functions sections), CHANGELOG.
 ---
 
 ## 7. `uc sync` — git-backed sync (no server)
+
+> **Status: implemented** on `feature/sync`, ahead of features 4–6. Built as
+> specced, with deliberate deviations that close data-loss holes:
+> (a) `uc sync pull` refuses while the live files hold unpushed changes,
+> and gains `--force` to discard them (a plain mirror would otherwise wipe
+> an unpushed edit); (b) pull uses `git pull --rebase` instead of
+> `--ff-only`, so the commit left by a rejected push is replayed on top of
+> the remote's — the spec's "pull then replays" story did not work with
+> ff-only; a same-file conflict aborts the rebase and reports `diverged`;
+> (c) `init` against a non-empty remote refuses to overwrite a machine
+> that already has *different* state, pointing at `pull --force` / `push`;
+> (d) dotfiles in `scripts/` (`.DS_Store`) are not synced; (e) a clone whose
+> remote HEAD names an unpushed branch, or a staging repo cloned while the
+> remote was empty, falls back to tracking whichever branch the remote has;
+> (f) `Syncer` has a `Warn io.Writer` for warnings (stderr in production);
+> (g) the clone sets `core.autocrlf=false` so scripts round-trip
+> byte-for-byte on Windows.
 
 ### Goal
 

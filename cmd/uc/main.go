@@ -55,6 +55,8 @@ func main() {
 		cmdErr = runAlias(r, rest)
 	case "function":
 		cmdErr = runFunction(r, rest)
+	case "sync":
+		cmdErr = runSync(r, rest)
 	case "help":
 		cmdErr = runHelp(r, rest)
 	case "version":
@@ -273,6 +275,41 @@ func runFunctionAdd(r *commands.Runner, args []string) error {
 		}
 	}
 	return r.FunctionAdd(name, body, desc)
+}
+
+func runSync(r *commands.Runner, args []string) error {
+	usage := fmt.Errorf("usage: uc sync <init|push|pull|status> ...")
+	if len(args) < 1 {
+		return usage
+	}
+	switch args[0] {
+	case "init":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: uc sync init <remote-url>")
+		}
+		return r.SyncInit(args[1])
+	case "push":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: uc sync push")
+		}
+		return r.SyncPush()
+	case "pull":
+		switch {
+		case len(args) == 1:
+			return r.SyncPull(false)
+		case len(args) == 2 && args[1] == "--force":
+			return r.SyncPull(true)
+		default:
+			return fmt.Errorf("usage: uc sync pull [--force]")
+		}
+	case "status":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: uc sync status")
+		}
+		return r.SyncStatus()
+	default:
+		return usage
+	}
 }
 
 func runHelp(r *commands.Runner, args []string) error {
