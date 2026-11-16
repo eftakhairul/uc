@@ -26,7 +26,7 @@ func TestRunInterpreterNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error, got nil")
 	}
-	if !strings.Contains(err.Error(), "interpreter for \".sh\" not found") {
+	if err.Error() != "cannot run 'script.sh': bash not found on PATH" {
 		t.Errorf("error = %q, want interpreter-not-found", err)
 	}
 }
@@ -85,6 +85,9 @@ func TestLookupInterpreterNoneFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error, got nil")
 	}
+	if err.Error() != "python3 or python not found on PATH" {
+		t.Errorf("error = %q", err)
+	}
 	for _, want := range []string{"python3", "python"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %q, want it to list %q", err, want)
@@ -100,6 +103,9 @@ func TestLookupInterpreterUnknownExtension(t *testing.T) {
 }
 
 func TestRunExtensionlessNotExecutable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix exec bits")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "plain")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
@@ -144,5 +150,50 @@ func TestExecReplaceNotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not found on PATH") {
 		t.Errorf("error = %q, want not-found", err)
+	}
+}
+
+func TestPrepareBuildsArgv(t *testing.T) {
+	dir := t.TempDir()
+	stubInterpreter(t, dir, "bash")
+	t.Setenv("PATH", dir)
+
+	p, err := Prepare("/x/deploy.sh", []string{"a", "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(p.Argv, " ") != "bash /x/deploy.sh a b" || p.Path != "/x/deploy.sh" {
+		t.Errorf("plan = %+v", p)
+	}
+
+	p, err = PrepareAlias("git status", "gs", []string{"-s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"bash", "-c", `git status "$@"`, "uc:gs", "-s"}
+	if strings.Join(p.Argv, "|") != strings.Join(want, "|") {
+		t.Errorf("alias argv = %q, want %q", p.Argv, want)
+	}
+
+	p, err = PrepareFunction("echo $1", "f", []string{"x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(p.Argv, "|") != "bash|-c|echo $1|uc:f|x" {
+		t.Errorf("function argv = %q", p.Argv)
+	}
+}
+
+// An empty alias plus the appended "$@" would run the user's arguments as
+// a command (improvement spec §4.3).
+func TestPrepareRefusesBlankText(t *testing.T) {
+	for _, text := range []string{"", "   ", "\n\t"} {
+		if _, err := PrepareAlias(text, "e", []string{"rm", "-rf", "x"}); err == nil ||
+			err.Error() != "'e' has an empty command — fix it with 'uc edit e'" {
+			t.Errorf("PrepareAlias(%q) err = %v", text, err)
+		}
+		if _, err := PrepareFunction(text, "f", nil); err == nil {
+			t.Errorf("PrepareFunction(%q): want error", text)
+		}
 	}
 }

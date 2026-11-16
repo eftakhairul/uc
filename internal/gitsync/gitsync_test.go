@@ -2,6 +2,8 @@ package gitsync
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eftakhairul/uc/internal/config"
 	"github.com/eftakhairul/uc/internal/registry"
@@ -74,6 +77,7 @@ func newMachine(t *testing.T) *machine {
 	m := &machine{cfg: cfg, out: &bytes.Buffer{}, warn: &bytes.Buffer{}}
 	m.s = New(cfg, m.out)
 	m.s.Warn = m.warn
+	cfg.Store().Warn = m.warn
 	return m
 }
 
@@ -114,6 +118,16 @@ func (m *machine) resetOut() {
 	m.warn.Reset()
 }
 
+// commands reads the machine's live commands.json.
+func (m *machine) commands(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile(m.cfg.CommandsPath())
+	if err != nil {
+		t.Fatalf("read commands.json: %v", err)
+	}
+	return string(data)
+}
+
 func commitCount(t *testing.T, remote string) int {
 	t.Helper()
 	out := gitRun(t, remote, "rev-list", "--all", "--count")
@@ -137,11 +151,14 @@ func TestInitEmptyRemotePushesThenSecondMachineAdopts(t *testing.T) {
 	if !strings.Contains(a.out.String(), "pushed initial state") {
 		t.Errorf("A init output = %q, want 'pushed initial state'", a.out.String())
 	}
-	if !strings.Contains(a.out.String(), "+ scripts/killport") || !strings.Contains(a.out.String(), "+ aliases.json") {
+	if !strings.Contains(a.out.String(), "+ scripts/killport") || !strings.Contains(a.out.String(), "+ commands.json") {
 		t.Errorf("A init output = %q, want per-file summary", a.out.String())
 	}
 	files := gitRun(t, remote, "ls-tree", "-r", "--name-only", "HEAD")
-	for _, want := range []string{"scripts/killport", "aliases.json"} {
+	if strings.Contains(files, "aliases.json") {
+		t.Errorf("remote tree = %q, want the merged layout only", files)
+	}
+	for _, want := range []string{"scripts/killport", "commands.json"} {
 		if !strings.Contains(files, want) {
 			t.Errorf("remote tree = %q, missing %s", files, want)
 		}
@@ -167,13 +184,16 @@ func TestInitEmptyRemotePushesThenSecondMachineAdopts(t *testing.T) {
 			t.Errorf("B killport mode = %v, want exec bit", info.Mode())
 		}
 	}
-	aliases, err := os.ReadFile(b.cfg.AliasesPath())
-	if err != nil || !strings.Contains(string(aliases), "git status") {
-		t.Errorf("B aliases.json = %q, %v; want synced", aliases, err)
+	if got := b.commands(t); !strings.Contains(got, "git status") {
+		t.Errorf("B commands.json = %q; want synced", got)
+	}
+	// A's legacy aliases.json was migrated before the first push.
+	if _, err := os.Stat(a.cfg.AliasesPath() + ".migrated"); err != nil {
+		t.Errorf("A's aliases.json was not migrated: %v", err)
 	}
 
 	// The synced script is a real registered script on B.
-	reg := registry.New(b.cfg.ScriptsDir, b.cfg.AliasesPath(), b.cfg.FunctionsPath())
+	reg := registry.New(b.cfg.ScriptsDir, b.cfg.Store())
 	res, err := reg.Resolve("killport")
 	if err != nil || res.Desc != "kills a port" {
 		t.Errorf("B Resolve(killport) = %+v, %v", res, err)
@@ -544,7 +564,7 @@ func TestSyncDirIsNotAScript(t *testing.T) {
 	if err := a.s.Init(remote); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	reg := registry.New(a.cfg.ScriptsDir, a.cfg.AliasesPath(), a.cfg.FunctionsPath())
+	reg := registry.New(a.cfg.ScriptsDir, a.cfg.Store())
 	items, err := reg.List()
 	if err != nil {
 		t.Fatal(err)
@@ -561,9 +581,8 @@ func TestMirror(t *testing.T) {
 	mk := func(name string) tree {
 		d := filepath.Join(root, name)
 		return tree{
-			scripts:   filepath.Join(d, "scripts"),
-			aliases:   filepath.Join(d, "aliases.json"),
-			functions: filepath.Join(d, "functions.json"),
+			scripts:  filepath.Join(d, "scripts"),
+			commands: filepath.Join(d, "commands.json"),
 		}
 	}
 	src, dst := mk("src"), mk("dst")
@@ -583,11 +602,10 @@ func TestMirror(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(src.scripts, "subdir"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	write(src.aliases, `{"a":1}`, 0o600)
+	write(src.commands, `{"version":1}`, 0o600)
 	write(filepath.Join(dst.scripts, "changed"), "old", 0o755)
 	write(filepath.Join(dst.scripts, "same"), "s", 0o755)
 	write(filepath.Join(dst.scripts, "gone"), "g", 0o755)
-	write(dst.functions, `{}`, 0o600)
 
 	var warn bytes.Buffer
 	changes, err := mirror(src, dst, &warn)
@@ -598,7 +616,7 @@ func TestMirror(t *testing.T) {
 	for _, c := range changes {
 		got = append(got, c.String())
 	}
-	want := []string{"+ scripts/added", "~ scripts/changed", "- scripts/gone", "+ aliases.json", "- functions.json"}
+	want := []string{"+ scripts/added", "~ scripts/changed", "- scripts/gone", "+ commands.json"}
 	if !slices.Equal(got, want) {
 		t.Errorf("changes = %q, want %q", got, want)
 	}
@@ -618,16 +636,16 @@ func TestMirror(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dst.scripts, "subdir")); !os.IsNotExist(err) {
 		t.Error("subdirectory was synced")
 	}
-	if _, err := os.Stat(dst.functions); !os.IsNotExist(err) {
-		t.Error("dst functions.json not deleted")
+	if data, _ := os.ReadFile(dst.commands); string(data) != `{"version":1}` {
+		t.Errorf("dst commands.json = %q", data)
 	}
 	if runtime.GOOS != "windows" {
 		info, err := os.Stat(filepath.Join(dst.scripts, "added"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm() != 0o755 {
-			t.Errorf("dst added mode = %v, want 0755", info.Mode().Perm())
+		if info.Mode().Perm() != config.ScriptMode {
+			t.Errorf("dst added mode = %v, want %o", info.Mode().Perm(), config.ScriptMode)
 		}
 	}
 
@@ -638,5 +656,225 @@ func TestMirror(t *testing.T) {
 	}
 	if len(changes) != 0 {
 		t.Errorf("second mirror changes = %v, want none", changes)
+	}
+}
+
+// A command deleting commands.json on one side propagates as a deletion.
+func TestMirrorDeletesCommands(t *testing.T) {
+	root := t.TempDir()
+	src := tree{scripts: filepath.Join(root, "src", "scripts"), commands: filepath.Join(root, "src", "commands.json")}
+	dst := tree{scripts: filepath.Join(root, "dst", "scripts"), commands: filepath.Join(root, "dst", "commands.json")}
+	if err := os.MkdirAll(filepath.Dir(dst.commands), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst.commands, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changes, err := mirror(src, dst, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || changes[0].String() != "- commands.json" {
+		t.Errorf("changes = %v", changes)
+	}
+}
+
+// writeLegacyRepo pushes a commit in the pre-merge layout to remote, as a
+// machine running the previous version would have.
+func writeLegacyRepo(t *testing.T, remote string) {
+	t.Helper()
+	work := filepath.Join(t.TempDir(), "old-machine")
+	gitRun(t, "", "clone", "-q", remote, work)
+	for name, content := range map[string]string{
+		"aliases.json":   `{"gs": {"command": "git status", "desc": "short", "usage": null, "examples": null}}`,
+		"functions.json": `{"ship": {"body": "uc build && uc deploy", "desc": null, "usage": null, "examples": null}}`,
+		"scripts/hello":  "#!/bin/sh\necho hello\n",
+	} {
+		path := filepath.Join(work, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitRun(t, work, "add", "-A")
+	gitRun(t, work, "commit", "-q", "-m", "old layout")
+	gitRun(t, work, "push", "-q", "origin", "HEAD")
+}
+
+func TestInitConvertsLegacyRepo(t *testing.T) {
+	setupGit(t)
+	remote := newRemote(t)
+	writeLegacyRepo(t, remote)
+
+	b := newMachine(t)
+	if err := b.s.Init(remote); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	got := b.commands(t)
+	for _, want := range []string{`"gs"`, "git status", `"ship"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("commands.json missing %s:\n%s", want, got)
+		}
+	}
+	if _, ok := b.script(t, "hello"); !ok {
+		t.Error("script not pulled")
+	}
+	// The conversion was committed and published.
+	files := gitRun(t, remote, "ls-tree", "-r", "--name-only", "HEAD")
+	if strings.Contains(files, "aliases.json") || strings.Contains(files, "functions.json") || !strings.Contains(files, "commands.json") {
+		t.Errorf("remote tree after conversion = %q", files)
+	}
+	if !strings.Contains(b.warn.String(), "converted the sync repo") {
+		t.Errorf("warn = %q, want the conversion note", b.warn.String())
+	}
+	reg := registry.New(b.cfg.ScriptsDir, b.cfg.Store())
+	if res, err := reg.Resolve("ship"); err != nil || res.Kind != registry.KindFunction {
+		t.Errorf("Resolve(ship) = %+v, %v", res, err)
+	}
+}
+
+func TestPullConvertsLegacyRepo(t *testing.T) {
+	setupGit(t)
+	remote := newRemote(t)
+	b := newMachine(t)
+	if err := b.s.Init(remote); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	// An older machine publishes in the old layout after B set up sync.
+	writeLegacyRepo(t, remote)
+
+	if err := b.s.Pull(false); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if got := b.commands(t); !strings.Contains(got, "git status") || !strings.Contains(got, "uc build && uc deploy") {
+		t.Errorf("commands.json after pull = %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(b.s.Dir, "aliases.json")); !os.IsNotExist(err) {
+		t.Error("legacy file still in the sync repo")
+	}
+	if !strings.Contains(b.out.String(), "not yet pushed") {
+		t.Errorf("out = %q, want a reminder to push the conversion", b.out.String())
+	}
+	if err := b.s.Push(); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	files := gitRun(t, remote, "ls-tree", "-r", "--name-only", "HEAD")
+	if strings.Contains(files, "aliases.json") || !strings.Contains(files, "commands.json") {
+		t.Errorf("remote tree = %q", files)
+	}
+}
+
+func TestPushMigratesLiveFirst(t *testing.T) {
+	setupGit(t)
+	remote := newRemote(t)
+	a := newMachine(t)
+	a.writeScript(t, "x", "#!/bin/sh\n")
+	if err := a.s.Init(remote); err != nil {
+		t.Fatal(err)
+	}
+	// Legacy files appear on the live side (e.g. restored from a backup
+	// made by the old version) while commands.json is absent.
+	a.writeAliases(t, `{"gs": {"command": "git status", "desc": null, "usage": null, "examples": null}}`)
+	a.resetOut()
+	if err := a.s.Push(); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if !strings.Contains(a.out.String(), "+ commands.json") {
+		t.Errorf("push output = %q", a.out.String())
+	}
+	if _, err := os.Stat(a.cfg.AliasesPath()); !os.IsNotExist(err) {
+		t.Error("live aliases.json not migrated before push")
+	}
+	files := gitRun(t, remote, "ls-tree", "-r", "--name-only", "HEAD")
+	if !strings.Contains(files, "commands.json") || strings.Contains(files, "aliases.json") {
+		t.Errorf("remote tree = %q", files)
+	}
+}
+
+// A URL starting with '-' would be read by git as an option;
+// --upload-pack=<command> runs that command (improvement spec §4.7).
+func TestInitRejectsDashURL(t *testing.T) {
+	setupGit(t)
+	m := newMachine(t)
+	marker := filepath.Join(t.TempDir(), "pwned")
+	err := m.s.Init("--upload-pack=touch " + marker)
+	if err == nil || !strings.Contains(err.Error(), "a remote URL cannot start with '-'") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Stat(m.s.Dir); !os.IsNotExist(err) {
+		t.Error("sync dir created for a rejected URL")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Error("the injected command ran")
+	}
+}
+
+// On a fresh machine with no git identity, commits must still work
+// (improvement spec §4.11), and a signing setup must not get in the way.
+func TestCommitWithoutIdentity(t *testing.T) {
+	setupGit(t)
+	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL"} {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
+	// useConfigOnly makes git refuse to guess an identity, as it does on
+	// a minimal container.
+	cfg := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(cfg, []byte("[user]\n\tuseConfigOnly = true\n[commit]\n\tgpgsign = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+
+	remote := newRemote(t)
+	a := newMachine(t)
+	a.writeScript(t, "x", "#!/bin/sh\n")
+	if err := a.s.Init(remote); err != nil {
+		t.Fatalf("init without identity: %v", err)
+	}
+	if got := gitRun(t, remote, "log", "-1", "--format=%an <%ae>"); !strings.HasPrefix(got, "uc <uc@") {
+		t.Errorf("commit author = %q, want the uc fallback", got)
+	}
+}
+
+func TestGitErrorFormat(t *testing.T) {
+	e := &gitError{doing: "pushing", output: "fatal: nope\nhint: try again", err: errors.New("exit status 128")}
+	want := "sync failed while pushing:\n  fatal: nope\n  hint: try again"
+	if e.Error() != want {
+		t.Errorf("got %q, want %q", e.Error(), want)
+	}
+	if got := (&gitError{doing: "fetching", err: errors.New("x")}).Error(); got != "sync failed while fetching: git exited with an error" {
+		t.Errorf("got %q", got)
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	_, err := runGit(time.Nanosecond, "--version")
+	timeout := &gitError{doing: "fetching", err: err}
+	if !errors.Is(err, context.DeadlineExceeded) || timeout.Error() != "sync failed while fetching: could not reach the remote (timed out)" {
+		t.Errorf("timeout: err = %v, message %q", err, timeout.Error())
+	}
+}
+
+// Failures shown to the user never include the internal git command line.
+func TestPushErrorHidesGitCommandLine(t *testing.T) {
+	setupGit(t)
+	remote := newRemote(t)
+	a := newMachine(t)
+	a.writeScript(t, "x", "#!/bin/sh\n")
+	if err := a.s.Init(remote); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(remote); err != nil {
+		t.Fatal(err)
+	}
+	a.writeScript(t, "y", "#!/bin/sh\n")
+	err := a.s.Push()
+	if err == nil {
+		t.Fatal("push to a deleted remote: want error")
+	}
+	if !strings.HasPrefix(err.Error(), "sync failed while pushing:") || strings.Contains(err.Error(), "git -C") || strings.Contains(err.Error(), "exit status") {
+		t.Errorf("err = %q", err)
 	}
 }

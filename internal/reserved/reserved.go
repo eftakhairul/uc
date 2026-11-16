@@ -20,6 +20,8 @@ var Names = []string{
 	"alias",
 	"function",
 	"sync",
+	"export",
+	"import",
 	"help",
 	"version",
 	"__complete",

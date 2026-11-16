@@ -38,7 +38,7 @@ func TestSyncAcrossTwoMachines(t *testing.T) {
 	require.Zerof(t, code, "A sync init: output:\n%s", out)
 	assert.Contains(t, out, "pushed initial state", "A sync init output")
 	assert.Contains(t, out, "+ scripts/killport", "A sync init output")
-	assert.Contains(t, out, "+ aliases.json", "A sync init output")
+	assert.Contains(t, out, "+ commands.json", "A sync init output")
 
 	out, code = runUC(t, envB, "sync", "init", remote)
 	require.Zerof(t, code, "B sync init: output:\n%s", out)
@@ -86,8 +86,9 @@ func TestSyncWithoutInit(t *testing.T) {
 	assert.Contains(t, out, "uc sync init", "sync push before init output")
 
 	out, code = runUC(t, env, "sync")
-	assert.NotZero(t, code, "bare sync: want nonzero exit")
-	assert.Contains(t, out, "usage: uc sync", "bare sync output")
+	assert.Equal(t, 2, code, "bare sync: want usage exit")
+	assert.Contains(t, out, "'sync' needs a command: init, push, pull, or status", "bare sync output")
+	assert.Contains(t, out, "usage: uc sync init <remote-url>", "bare sync output")
 
 	out, code = runUC(t, env, "help", "sync")
 	require.Zerof(t, code, "help sync: output:\n%s", out)

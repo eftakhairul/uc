@@ -3,6 +3,10 @@
 // it had been run directly (architecture §3.3). Windows has no process
 // replacement — there, exec1 falls back to spawning the child with inherited
 // stdio and mirroring its exit code (see exec_windows.go).
+//
+// Running is split in two: Prepare* resolves the interpreter or bash and
+// builds argv, and Plan.Exec hands over. Callers record history between the
+// two, so a run that could never start isn't recorded.
 package executor
 
 import (
@@ -39,71 +43,116 @@ func lookupInterpreter(ext string) (bin, name string, err error) {
 			return found, c, nil
 		}
 	}
-	return "", "", fmt.Errorf("interpreter for %q not found on PATH (tried %s)",
-		ext, strings.Join(candidates, ", "))
+	return "", "", fmt.Errorf("%s not found on PATH", strings.Join(candidates, " or "))
 }
 
 // errNoInterpreter signals that an extension has no registered
 // interpreter, so the script must be executed directly via its shebang.
 var errNoInterpreter = errors.New("no interpreter registered for extension")
 
-// Run replaces the current process image with the script, via its
-// interpreter for known extensions or directly for extensionless scripts
-// (which must have their own shebang and exec bit).
-//
-// This function does not return on success — the process is replaced.
-// It only returns if resolving the interpreter/binary fails before exec.
-func Run(path string, args []string) error {
-	ext := filepath.Ext(path)
+// Plan is a ready-to-exec invocation.
+type Plan struct {
+	Bin  string   // resolved binary
+	Argv []string // argv, argv[0] included
+	// Path is the script file for a script plan ("" for alias/function),
+	// used to explain exec failures in terms of the file the user owns.
+	Path string
+}
 
-	var argv0 string
-	var argv []string
-
-	bin, interp, err := lookupInterpreter(ext)
+// Prepare resolves how to run the script at path: via its interpreter for
+// known extensions, or directly for extensionless scripts (which must have
+// their own shebang and exec bit).
+func Prepare(path string, args []string) (*Plan, error) {
+	bin, interp, err := lookupInterpreter(filepath.Ext(path))
 	switch {
 	case err == nil:
-		argv0 = bin
-		argv = append([]string{interp, path}, args...)
+		return &Plan{Bin: bin, Argv: append([]string{interp, path}, args...), Path: path}, nil
 	case errors.Is(err, errNoInterpreter):
-		bin, lookErr := exec.LookPath(path)
+		found, lookErr := exec.LookPath(path)
 		if lookErr != nil {
-			return fmt.Errorf("%s is not executable: %w", path, lookErr)
+			return nil, notExecutable(path)
 		}
-		argv0 = bin
-		argv = append([]string{path}, args...)
+		return &Plan{Bin: found, Argv: append([]string{path}, args...), Path: path}, nil
 	default:
-		return err
+		return nil, fmt.Errorf("cannot run '%s': %v", filepath.Base(path), err)
 	}
-
-	return exec1(argv0, argv)
 }
 
-// RunFunction replaces the current process image with a bash invocation of
-// body, placing name as bash's $0 (a harmless placeholder useful for error
-// messages inside the body) so user args land at $1/$2/$@ as expected
-// (architecture §3.2c) — bash -c treats its next argument as $0, not $1,
-// which this call must account for explicitly.
-func RunFunction(body, name string, args []string) error {
-	return runBash(body, name, args)
+func notExecutable(path string) error {
+	return fmt.Errorf("cannot run '%s': it is not executable — run chmod +x on it, or add it again", path)
 }
 
-// RunAlias replaces the current process image with a bash invocation of
-// command, with the user's invocation args automatically appended at the
-// end via "$@" — the same behavior as bash's own alias expansion (e.g.
-// `alias gs='git status'` then `gs -s` runs `git status -s`), so unlike a
-// function body, command doesn't need to reference $1/$@ itself
-// (architecture §3.2b).
-func RunAlias(command, name string, args []string) error {
-	return runBash(command+` "$@"`, name, args)
+func noShebang(path string) error {
+	return fmt.Errorf("cannot run '%s': it has no shebang line (for example #!/usr/bin/env bash)", path)
 }
 
-func runBash(script, name string, args []string) error {
+// PrepareFunction builds a bash invocation of body, placing "uc:<name>" as
+// bash's $0 so user args land at $1/$2/$@ as expected (architecture §3.2c)
+// — bash -c treats its next argument as $0, not $1.
+func PrepareFunction(body, name string, args []string) (*Plan, error) {
+	return prepareBash(body, body, name, args)
+}
+
+// PrepareAlias builds a bash invocation of command with the user's
+// invocation args appended at the end via "$@" — the same behavior as
+// bash's own alias expansion (e.g. `alias gs='git status'` then `gs -s`
+// runs `git status -s`), so unlike a function body, command doesn't need
+// to reference $1/$@ itself (architecture §3.2b).
+func PrepareAlias(command, name string, args []string) (*Plan, error) {
+	return prepareBash(command, command+` "$@"`, name, args)
+}
+
+// prepareBash refuses blank text: an empty alias plus the appended "$@"
+// would run the user's arguments as a command.
+func prepareBash(text, script, name string, args []string) (*Plan, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, fmt.Errorf("'%s' has an empty command — fix it with 'uc edit %s'", name, name)
+	}
 	bin, err := exec.LookPath("bash")
 	if err != nil {
-		return fmt.Errorf("bash not found on PATH: %w", err)
+		return nil, fmt.Errorf("cannot run '%s': bash not found on PATH", name)
 	}
-	argv := append([]string{"bash", "-c", script, "uc:" + name}, args...)
-	return exec1(bin, argv)
+	return &Plan{Bin: bin, Argv: append([]string{"bash", "-c", script, "uc:" + name}, args...)}, nil
+}
+
+// Exec replaces the current process with the plan. It does not return on
+// success.
+func (p *Plan) Exec() error {
+	err := exec1(p.Bin, p.Argv)
+	if err == nil || p.Path == "" {
+		return err
+	}
+	return explainExecError(p.Path, err)
+}
+
+// Run prepares and execs the script at path. It does not return on
+// success.
+func Run(path string, args []string) error {
+	p, err := Prepare(path, args)
+	if err != nil {
+		return err
+	}
+	return p.Exec()
+}
+
+// RunFunction prepares and execs a function body. It does not return on
+// success.
+func RunFunction(body, name string, args []string) error {
+	p, err := PrepareFunction(body, name, args)
+	if err != nil {
+		return err
+	}
+	return p.Exec()
+}
+
+// RunAlias prepares and execs an alias command. It does not return on
+// success.
+func RunAlias(command, name string, args []string) error {
+	p, err := PrepareAlias(command, name, args)
+	if err != nil {
+		return err
+	}
+	return p.Exec()
 }
 
 // ExecReplace replaces the current process image with argv[0], looked up
@@ -113,7 +162,7 @@ func runBash(script, name string, args []string) error {
 func ExecReplace(argv []string) error {
 	bin, err := exec.LookPath(argv[0])
 	if err != nil {
-		return fmt.Errorf("%s not found on PATH: %w", argv[0], err)
+		return fmt.Errorf("%s not found on PATH", argv[0])
 	}
 	return exec1(bin, argv)
 }

@@ -5,18 +5,23 @@
 package picker
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"runtime"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/eftakhairul/uc/internal/commands"
 	"github.com/eftakhairul/uc/internal/config"
 	"github.com/eftakhairul/uc/internal/history"
 	"github.com/eftakhairul/uc/internal/ranker"
 	"github.com/eftakhairul/uc/internal/registry"
+	"github.com/eftakhairul/uc/internal/shellsplit"
 )
 
 type mode int
@@ -39,6 +44,7 @@ type model struct {
 	input    string
 	mode     mode
 	argInput string
+	argErr   string // shown under the args line, e.g. an unclosed quote
 	selected *item
 
 	quit bool
@@ -139,10 +145,9 @@ func (m model) updateFilter(keyMsg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyRunes, tea.KeySpace:
+		// KeySpace already carries ' ' in Runes; appending another would
+		// insert two spaces and break any filter containing one.
 		m.input += string(keyMsg.Runes)
-		if keyMsg.Type == tea.KeySpace {
-			m.input += " "
-		}
 		m.applyFilter()
 		return m, nil
 	}
@@ -155,18 +160,21 @@ func (m model) updateArgs(keyMsg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quit = true
 		return m, tea.Quit
 	case tea.KeyEnter:
+		if _, _, err := parseArgLine(m.argInput); err != nil {
+			m.argErr = err.Error()
+			return m, nil
+		}
 		return m, tea.Quit
 	case tea.KeyBackspace:
 		if len(m.argInput) > 0 {
 			r := []rune(m.argInput)
 			m.argInput = string(r[:len(r)-1])
 		}
+		m.argErr = ""
 		return m, nil
 	case tea.KeyRunes, tea.KeySpace:
 		m.argInput += string(keyMsg.Runes)
-		if keyMsg.Type == tea.KeySpace {
-			m.argInput += " "
-		}
+		m.argErr = ""
 		return m, nil
 	}
 	return m, nil
@@ -174,7 +182,11 @@ func (m model) updateArgs(keyMsg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	if m.mode == modeArgs {
-		return fmt.Sprintf("%s %s\n\n(enter to run, esc to cancel)\n", promptStyle.Render("run:"), m.argInput)
+		hint := "(enter to run, esc to cancel)"
+		if m.argErr != "" {
+			hint = m.argErr + " — fix it, or esc to cancel"
+		}
+		return fmt.Sprintf("%s %s\n\n%s\n", promptStyle.Render("run:"), m.argInput, hint)
 	}
 
 	var b strings.Builder
@@ -218,6 +230,14 @@ func Run(cfg *config.Config, r *commands.Runner) error {
 	if err != nil {
 		return err
 	}
+	// Nothing to pick from: show what uc can do instead. Checked before
+	// history is read, so a broken history file can't block it.
+	if len(regItems) == 0 {
+		return r.Help("")
+	}
+	if !haveTerminal() {
+		return errNoTerminal
+	}
 
 	entries, err := history.Load(cfg.HistoryPath())
 	if err != nil {
@@ -240,11 +260,6 @@ func Run(cfg *config.Config, r *commands.Runner) error {
 		items[i] = item{name: it.Name, kind: string(it.Kind), desc: it.Desc}
 	}
 
-	if len(items) == 0 {
-		fmt.Println("no scripts, aliases, or functions registered — add one with `uc add <path> [name]`")
-		return nil
-	}
-
 	p := tea.NewProgram(newModel(items))
 	finalModel, err := p.Run()
 	if err != nil {
@@ -256,16 +271,48 @@ func Run(cfg *config.Config, r *commands.Runner) error {
 		return nil
 	}
 
-	name, args := parseArgLine(fm.argInput)
+	name, args, err := parseArgLine(fm.argInput)
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		return nil
+	}
 	return r.Run(name, args)
 }
 
-// parseArgLine splits a picker arg-input line ("name arg1 arg2") into the
-// script name and its arguments, using simple whitespace splitting.
-func parseArgLine(line string) (string, []string) {
-	fields := strings.Fields(line)
-	if len(fields) == 0 {
-		return "", nil
+var errNoTerminal = errors.New("the interactive picker needs a terminal — run 'uc list' to see what is registered, or 'uc <name>' to run something")
+
+// haveTerminal reports whether the picker can run: stdin is a terminal,
+// or — as bubbletea falls back to when stdin is piped — the controlling
+// terminal can be opened. (A character-device check isn't enough:
+// /dev/null is one too.)
+func haveTerminal() bool {
+	if term.IsTerminal(os.Stdin.Fd()) {
+		return true
 	}
-	return fields[0], fields[1:]
+	tty := "/dev/tty"
+	if runtime.GOOS == "windows" {
+		tty = "CONIN$"
+	}
+	f, err := os.Open(tty)
+	if err != nil {
+		return false
+	}
+	f.Close()
+	return true
+}
+
+// parseArgLine splits a picker arg-input line ("name arg1 'arg two'") into
+// the name and its arguments with shell quoting rules, so a quoted
+// argument containing spaces stays one argument.
+func parseArgLine(line string) (string, []string, error) {
+	fields, err := shellsplit.Split(line)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(fields) == 0 {
+		return "", nil, nil
+	}
+	return fields[0], fields[1:], nil
 }

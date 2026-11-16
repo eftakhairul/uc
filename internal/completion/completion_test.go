@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eftakhairul/uc/internal/aliases"
 	"github.com/eftakhairul/uc/internal/history"
 	"github.com/eftakhairul/uc/internal/ranker"
 	"github.com/eftakhairul/uc/internal/registry"
+	"github.com/eftakhairul/uc/internal/store"
 )
 
 func writeScript(t *testing.T, dir, name, content string) {
@@ -27,7 +27,8 @@ func writeScript(t *testing.T, dir, name, content string) {
 func newTestRegistry(t *testing.T, scriptsDir string) *registry.Registry {
 	t.Helper()
 	dir := t.TempDir()
-	return registry.New(scriptsDir, filepath.Join(dir, "aliases.json"), filepath.Join(dir, "functions.json"))
+	st := store.New(filepath.Join(dir, "commands.json"), filepath.Join(dir, "aliases.json"), filepath.Join(dir, "functions.json"))
+	return registry.New(scriptsDir, st)
 }
 
 func TestScript_Fish(t *testing.T) {
@@ -75,8 +76,7 @@ func TestDescribedCandidates_CarriesDescriptions(t *testing.T) {
 	writeScript(t, scripts, "kbare", "#!/bin/sh\necho hi\n")
 
 	reg := newTestRegistry(t, scripts)
-	desc := "git status"
-	if err := aliases.Add(reg.AliasesPath, "kgs", aliases.Alias{Command: "git status", Desc: &desc}); err != nil {
+	if err := reg.Store.SetAlias("kgs", store.Alias{Command: "git status", Desc: "git status"}); err != nil {
 		t.Fatalf("alias add: %v", err)
 	}
 
@@ -172,5 +172,19 @@ func TestCandidates_StripsDescriptions(t *testing.T) {
 	}
 	if len(names) != 1 || names[0] != "killport" {
 		t.Errorf("got %v, want [killport]", names)
+	}
+}
+
+// New reserved commands complete like the others.
+func TestDescribedCandidates_IncludesExportImport(t *testing.T) {
+	reg := newTestRegistry(t, t.TempDir())
+	for _, prefix := range []string{"exp", "imp"} {
+		pairs, err := DescribedCandidates(reg, nil, ranker.DefaultWeights, prefix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pairs) != 1 {
+			t.Errorf("prefix %q: %v", prefix, pairs)
+		}
 	}
 }

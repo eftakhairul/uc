@@ -70,7 +70,7 @@ func TestNewScaffoldsRunnableScript(t *testing.T) {
 func TestAliasLifecycle(t *testing.T) {
 	env := sandbox(t)
 
-	out, code := runUC(t, env, "alias", "add", "gs", "echo", "hi", "--desc", "greet")
+	out, code := runUC(t, env, "alias", "add", "gs", "--desc", "greet", "echo", "hi")
 	require.Equalf(t, 0, code, "alias add: output:\n%s", out)
 
 	// Auto-append: the alias's own text has no $1/$@, yet invocation args
@@ -207,7 +207,7 @@ func TestAddGuards(t *testing.T) {
 	// Traversal names must not escape the scripts directory.
 	out, code = runUC(t, env, "add", "/tmp/guard.sh", "../evil")
 	assert.Equalf(t, 1, code, "traversal add: output:\n%s", out)
-	assert.Contains(t, out, "invalid script name", "traversal add output")
+	assert.Contains(t, out, "invalid name", "traversal add output")
 }
 
 func TestAliasAppendHazardWarning(t *testing.T) {

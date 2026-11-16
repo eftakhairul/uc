@@ -16,7 +16,9 @@ aliases, and shell functions. Register something once, then run it from anywhere
 9. [Editing](#editing)
 10. [Removing](#removing)
 11. [Sync Across Machines](#sync-across-machines)
-12. [Configuration](#configuration)
+12. [Export and Import](#export-and-import)
+13. [Getting Help and Reading Errors](#getting-help-and-reading-errors)
+14. [Configuration](#configuration)
 
 ## Installation
 
@@ -77,8 +79,8 @@ uc add ~/scripts/killport.sh killport --force
 
 ### Add a script from a URL
 
-Pass an `http://` or `https://` URL instead of a path and `uc` downloads the
-script (up to 1 MB) and registers it:
+Pass an `https://` URL instead of a path and `uc` downloads the script (up
+to 1 MB) and registers it:
 
 ```sh
 uc add https://raw.githubusercontent.com/you/dotfiles/main/killport.sh
@@ -96,12 +98,27 @@ uc add https://gist.github.com/you/abc123 killport
 ```
 
 A URL install follows the same rules as a local one: an existing or
-ambiguous name is refused unless you pass `--force`. Those checks run before
-anything is downloaded, and nothing is written unless the download succeeds.
-Redirects are followed.
+ambiguous name, or one already used by an alias or function, is refused
+unless you pass `--force`. Those checks run before anything is downloaded,
+and nothing is written unless the download succeeds. Up to 5 redirects are
+followed.
 
-`uc` never runs what it downloads on its own, and it doesn't inspect the
-content either. Use raw file URLs, not repository web pages, and read the
+Plain `http://` is refused, because anyone on the network path could change
+the script before it reaches you:
+
+```sh
+uc add http://example.com/tool.sh
+# uc: refusing to download over plain http — use an https URL, or pass --insecure
+
+uc add http://intranet.local/tool.sh --insecure   # if you accept the risk
+```
+
+The same applies to an `https://` URL that redirects to `http://`.
+Addresses on your own machine (`localhost`, `127.0.0.1`) are always allowed.
+
+`uc` never runs what it downloads on its own. Use raw file URLs, not
+repository web pages — a URL that returns a web page is refused with
+`this URL returned a web page, not a script — use the raw file URL`. Read the
 script (`uc which <name>` prints its path) before its first run.
 
 ### Create a script from scratch
@@ -209,9 +226,32 @@ uc alias add dp 'uc deploy --env=production'
 
 ### Add a description
 
+Options go **before** the command:
+
+```sh
+uc alias add gs --desc "short git status" git status
+```
+
+Everything from the first command word on is the alias — including any
+flags, so a tool's own `--desc` is never taken by `uc`:
+
+```sh
+uc alias add mk mytool create --desc "new item" --verbose
+# alias runs: mytool create --desc new item --verbose
+```
+
+If you put `--desc` after the command out of habit, the alias is still
+added, and `uc` shows where to move it:
+
 ```sh
 uc alias add gs git status --desc "short git status"
+# added alias gs -> git status --desc short git status
+# uc: note: '--desc' is part of the alias command. To set a description, put it before the command:
+#           uc alias add gs --desc "short git status" git status
 ```
+
+For a command that itself starts with `-`, put `--` in front of it:
+`uc alias add x -- --weird-binary -v`.
 
 ## Functions
 
@@ -318,6 +358,19 @@ uc history run 1
 `uc history run` re-resolves the name at replay time, so edits to aliases or
 functions are picked up automatically.
 
+### Clear or turn off history
+
+History records the arguments you pass — including any token typed on the
+command line. To wipe it:
+
+```sh
+uc history clear
+# history cleared
+```
+
+To stop recording altogether, set `"history_size": 0` in `settings.json`;
+`uc history` then says `history is turned off (history_size is 0)`.
+
 ## Listing and Inspecting
 
 ### List everything
@@ -349,6 +402,9 @@ Or use the shortcut when `--help` is the only argument:
 ```sh
 uc killport --help
 ```
+
+See [Getting Help and Reading Errors](#getting-help-and-reading-errors) for
+help on `uc`'s own commands.
 
 ## Editing
 
@@ -430,8 +486,8 @@ What syncs, and what doesn't:
 | Synced | Not synced |
 |---|---|
 | `$UC_HOME/scripts/` | `history.json` (per-machine usage) |
-| `aliases.json` | `settings.json` (per-machine, e.g. `editor`) |
-| `functions.json` | dotfiles and subdirectories inside `scripts/` |
+| `commands.json` (aliases and functions) | `settings.json` (per-machine, e.g. `editor`) |
+| | dotfiles and subdirectories inside `scripts/` |
 
 ### Check where you are
 
@@ -464,10 +520,109 @@ fetched state.
 
 ### How it's stored
 
-The remote is cloned into `$UC_HOME/sync`, laid out as `scripts/`,
-`aliases.json`, and `functions.json`. Your live files stay where they
-always are; `uc sync` copies between them and that clone. The remote URL
-lives in the clone's own git config — there is no `settings.json` key.
+The remote is cloned into `$UC_HOME/sync`, laid out as `scripts/` and
+`commands.json`. Your live files stay where they always are; `uc sync`
+copies between them and that clone. The remote URL lives in the clone's own
+git config — there is no `settings.json` key.
+
+A repo created by an older `uc` holds `aliases.json` and `functions.json`
+instead. The first sync from this version converts it to `commands.json`
+in a commit of its own and publishes it; upgrade `uc` on your other
+machines before they sync again.
+
+Sync commits don't depend on your git setup: on a machine with no git
+identity, `uc` commits as `uc <uc@hostname>`, and commit signing is turned
+off for these commits so nothing prompts. A remote that can't be reached
+times out with `could not reach the remote (timed out)` instead of hanging.
+
+## Export and Import
+
+`uc sync` keeps machines in step continuously. For a one-off move, a
+backup, or handing scripts to someone, write an archive instead:
+
+```sh
+uc export
+# exported 12 scripts, 5 aliases, 2 functions to uc-export-laptop-20261116.tar.gz
+# uc: note: the archive may contain secrets — treat it like a private key
+
+uc export backup.tar.gz          # choose the file; --force to overwrite
+uc export - | ssh desktop 'uc import -'
+```
+
+The archive contains `scripts/` and `commands.json`, never `settings.json`
+or `history.json`, and is created readable only by you.
+
+On the other machine:
+
+```sh
+uc import backup.tar.gz --dry-run
+# + script killport
+# ~ alias gs
+# 1 to add, 1 to replace — nothing written (--dry-run)
+
+uc import backup.tar.gz
+# uc: 1 entry already exists with different content:
+#   ~ alias gs
+# pass --force to replace them, or --dry-run to preview
+
+uc import backup.tar.gz --force
+```
+
+Import merges: it never deletes anything, skips entries that are already
+identical, and imports nothing at all if any entry would replace something
+different — unless you pass `--force`.
+
+An archive may come from someone else, so `uc import` checks all of it
+before writing anything, and rejects the whole archive if any of these
+fail:
+
+- only `commands.json` and `scripts/<name>` entries, no `..`, absolute
+  paths, or nested folders;
+- only regular files — no symlinks, hard links, or devices;
+- every name valid (see below), and no empty alias or function;
+- at most 1 MB per file, 1000 entries, and 50 MB in total.
+
+Imported scripts get `uc`'s own file mode, never the one in the archive.
+
+## Getting Help and Reading Errors
+
+`uc help` (also `uc -h` or `uc --help`) prints a one-screen overview: one
+line per command, grouped by what you use them for. With nothing registered
+yet, bare `uc` prints the same overview.
+
+```sh
+uc help alias        # full usage and details for one command
+uc alias --help      # same thing
+uc -v                # version (also --version)
+```
+
+When a command is called the wrong way, `uc` says what was wrong, shows that
+command's usage, and exits with status 2:
+
+```sh
+uc history -n
+# uc: 'history' expects a number, got '-n'
+# usage: uc history [<n>]
+#    or: uc history run <n>
+#    or: uc history clear
+# See 'uc help history'.
+```
+
+An unknown name exits with status 127 and suggests close matches;
+`uc help <unknown>` gives the same message but exits 1, since nothing was
+meant to run:
+
+```sh
+uc kilport
+# uc: 'kilport' is not a uc command or a registered name.
+#
+# The most similar name is
+#         killport
+```
+
+Names for scripts, aliases, and functions use letters, digits, `.`, `_` and
+`-`, start with a letter, digit or `_`, and are at most 64 characters. A
+name can't be both an alias and a function.
 
 ## Configuration
 
@@ -492,3 +647,23 @@ Example:
 ```
 
 Unknown keys are ignored so older config files keep working across upgrades.
+
+If the file can't be used — invalid JSON, a value of the wrong type, or a
+value out of range (`history_size` must be 0–10000; weights can't be
+negative) — `uc` prints a warning such as
+`uc: warning: ignoring settings.json: "history_size" must be a whole number — using defaults`
+and carries on with the defaults. A typo here never locks you out.
+
+`editor` follows shell quoting, so a path with spaces works:
+`"editor": "\"/Applications/My Editor\" --wait"`.
+
+### Files
+
+Aliases and functions live together in `$XDG_CONFIG_HOME/uc/commands.json`.
+If you are upgrading from a version that used `aliases.json` and
+`functions.json`, `uc` keeps reading those until your first change, then
+merges them into `commands.json` and keeps the old files as `*.migrated`.
+
+New directories and scripts are created readable only by you (mode `700`).
+To tighten an existing install:
+`chmod 700 ~/.uc ~/.uc/scripts ~/.config/uc`.
