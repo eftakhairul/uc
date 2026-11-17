@@ -2,21 +2,37 @@
 // would for quoting purposes — single quotes, double quotes, and backslash
 // escapes — without any expansion. Used for the picker's argument line and
 // the editor command.
+//
+// Backslash handling is deliberately narrower than a shell's, so paths and
+// regexes typed with backslashes survive: outside quotes a backslash only
+// escapes whitespace, a quote, or another backslash, and on Windows (where
+// backslash is the path separator) it is always literal outside quotes.
 package shellsplit
 
 import (
 	"errors"
+	"runtime"
 	"strings"
 )
 
 // ErrUnclosedQuote is returned for input that ends inside a quote.
 var ErrUnclosedQuote = errors.New("unclosed quote")
 
-// Split breaks s into words. Inside single quotes everything is literal.
-// Inside double quotes a backslash escapes only \, ", $, and `; elsewhere
-// it is kept. Outside quotes a backslash escapes the next character, and a
-// trailing backslash is kept as itself. Empty quotes produce an empty word.
+// Split breaks s into words using the current platform's backslash rules.
+// Inside single quotes everything is literal. Inside double quotes a
+// backslash escapes only \, ", $, and ` (only " on Windows); elsewhere it is
+// kept. Outside quotes a backslash escapes whitespace, a quote, or a
+// backslash (never on Windows) and is otherwise kept, so `C:\Windows\x.exe`
+// and `a\.b` pass through unchanged. Empty quotes produce an empty word.
 func Split(s string) ([]string, error) {
+	return split(s, runtime.GOOS == "windows")
+}
+
+func split(s string, windows bool) ([]string, error) {
+	dqEscapable := `\"$` + "`"
+	if windows {
+		dqEscapable = `"`
+	}
 	var (
 		words   []string
 		cur     strings.Builder
@@ -45,7 +61,7 @@ func Split(s string) ([]string, error) {
 			switch {
 			case c == '"':
 				quoteCh = 0
-			case c == '\\' && i+1 < len(runes) && strings.ContainsRune(`\"$`+"`", runes[i+1]):
+			case c == '\\' && i+1 < len(runes) && strings.ContainsRune(dqEscapable, runes[i+1]):
 				i++
 				cur.WriteRune(runes[i])
 			default:
@@ -61,7 +77,7 @@ func Split(s string) ([]string, error) {
 			inWord = true
 		case '\\':
 			inWord = true
-			if i+1 < len(runes) {
+			if !windows && i+1 < len(runes) && strings.ContainsRune(" \t\n'\"\\", runes[i+1]) {
 				i++
 				cur.WriteRune(runes[i])
 			} else {

@@ -457,7 +457,7 @@ func (s *Syncer) convertLegacyRepo() error {
 	if err != nil {
 		return err
 	}
-	data, err := store.Encode(f)
+	data, err := store.EncodeAll(f)
 	if err != nil {
 		return err
 	}

@@ -27,8 +27,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "uc: %v\n", err)
 		return 1
 	}
-	// Tab completion must stay silent, whatever is wrong with settings.
-	if len(args) == 0 || args[0] != "__complete" {
+	// Tab completion must stay silent, whatever is wrong with settings or
+	// commands.json: anything on stderr lands in the user's prompt line.
+	completing := len(args) > 0 && args[0] == "__complete"
+	if !completing {
 		for _, w := range cfg.Warnings {
 			fmt.Fprintf(stderr, "uc: warning: %s\n", w)
 		}
@@ -37,6 +39,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	r := commands.New(cfg)
 	r.Out, r.Err, r.In = stdout, stderr, stdin
 	cfg.Store().Warn = stderr
+	if completing {
+		cfg.Store().Warn = io.Discard
+	}
 
 	return report(stderr, dispatch(cfg, r, args))
 }
@@ -82,6 +87,7 @@ func dispatch(cfg *config.Config, r *commands.Runner, args []string) error {
 	if reserved.Is(name) && !reserved.Hidden[name] && isHelpFlag(rest) {
 		return r.Help(name)
 	}
+	r.WarnShadowed(name)
 
 	switch name {
 	case "-h", "--help":

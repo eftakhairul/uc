@@ -536,3 +536,53 @@ func TestReport(t *testing.T) {
 		t.Errorf("usage: %d %q", code, b.String())
 	}
 }
+
+// commands.json problems are reported normally, but never during tab
+// completion, where stderr lands in the user's prompt line.
+func TestCompletionSilencesStoreWarnings(t *testing.T) {
+	h := newHome(t)
+	if err := os.MkdirAll(filepath.Join(h.configDir, "uc"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cj := `{"version": 1, "aliases": {"dup": {"command": "a"}, "../evil": {"command": "x"}}, "functions": {"dup": {"body": "b"}}}`
+	if err := os.WriteFile(filepath.Join(h.configDir, "uc", "commands.json"), []byte(cj), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, stderr, _ := uc(t, "list"); !strings.Contains(stderr, "warning") {
+		t.Errorf("list: want warnings, stderr %q", stderr)
+	}
+	if _, stderr, code := uc(t, "__complete", "d"); code != 0 || stderr != "" {
+		t.Errorf("__complete: exit %d, stderr %q", code, stderr)
+	}
+}
+
+// A script named after a built-in added later (export, import) can't run;
+// uc says so instead of silently running the built-in, and it can still
+// be removed.
+func TestShadowedByBuiltinWarns(t *testing.T) {
+	h := newHome(t)
+	scripts := filepath.Join(h.ucHome, "scripts")
+	if err := os.MkdirAll(scripts, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(scripts, "import.sh"), []byte("#!/bin/sh\necho hi\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, _ := uc(t, "import", "nope.tar.gz")
+	if !strings.Contains(stderr, "your script 'import' is hidden by the built-in 'uc import'") {
+		t.Errorf("import: stderr %q", stderr)
+	}
+	stdout, _, code := uc(t, "list")
+	if code != 0 || !strings.Contains(stdout, "hidden by the built-in 'uc import'") {
+		t.Errorf("list: exit %d, stdout %q", code, stdout)
+	}
+	if _, stderr, code := uc(t, "remove", "import"); code != 0 {
+		t.Errorf("remove import: exit %d, stderr %q", code, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(scripts, "import.sh")); !os.IsNotExist(err) {
+		t.Errorf("import.sh still exists: %v", err)
+	}
+	if _, stderr, _ := uc(t, "list"); strings.Contains(stderr, "hidden") {
+		t.Errorf("list after remove: stderr %q", stderr)
+	}
+}

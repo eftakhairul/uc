@@ -48,6 +48,13 @@ type File struct {
 	Version   int                 `json:"version"`
 	Aliases   map[string]Alias    `json:"aliases"`
 	Functions map[string]Function `json:"functions"`
+
+	// Entries Load set aside because their name is unusable. They are
+	// invisible to lookups but written back by Save (and EncodeAll), so a
+	// hand-edited entry the user was only warned about is never erased by
+	// an unrelated change.
+	ignoredAliases   map[string]Alias
+	ignoredFunctions map[string]Function
 }
 
 // NewFile returns an empty File with non-nil maps.
@@ -159,18 +166,27 @@ func (s *Store) parse(data []byte) (*File, error) {
 	return f, nil
 }
 
-// dropUnsafe removes entries whose name could never be invoked (and could
-// point lookups outside the scripts directory if it were).
+// dropUnsafe sets aside entries whose name could never be invoked (and
+// could point lookups outside the scripts directory if it were). They are
+// kept on the File so Save preserves them.
 func (s *Store) dropUnsafe(f *File, file string) {
-	for name := range f.Aliases {
+	for name, a := range f.Aliases {
 		if !names.SafeName(name) {
-			s.warnOnce("uc: warning: ignoring alias %q in %s — not a usable name", name, file)
+			s.warnOnce("uc: warning: ignoring alias %q in %s — not a usable name; rename it in %s", name, file, file)
+			if f.ignoredAliases == nil {
+				f.ignoredAliases = map[string]Alias{}
+			}
+			f.ignoredAliases[name] = a
 			delete(f.Aliases, name)
 		}
 	}
-	for name := range f.Functions {
+	for name, fn := range f.Functions {
 		if !names.SafeName(name) {
-			s.warnOnce("uc: warning: ignoring function %q in %s — not a usable name", name, file)
+			s.warnOnce("uc: warning: ignoring function %q in %s — not a usable name; rename it in %s", name, file, file)
+			if f.ignoredFunctions == nil {
+				f.ignoredFunctions = map[string]Function{}
+			}
+			f.ignoredFunctions[name] = fn
 			delete(f.Functions, name)
 		}
 	}
@@ -270,7 +286,7 @@ func exists(path string) bool {
 // and never on a read.
 func (s *Store) Save(f *File) error {
 	migrating := !exists(s.Path)
-	data, err := Encode(f)
+	data, err := EncodeAll(f)
 	if err != nil {
 		return err
 	}
@@ -292,6 +308,29 @@ func (s *Store) Save(f *File) error {
 			strings.Join(moved, " and "), filepath.Base(s.Path))
 	}
 	return nil
+}
+
+// EncodeAll is Encode plus any entries Load set aside for having an
+// unusable name — for writing commands.json back in place, where those
+// entries must survive. Export uses Encode, which leaves them out.
+func EncodeAll(f *File) ([]byte, error) {
+	if len(f.ignoredAliases)+len(f.ignoredFunctions) == 0 {
+		return Encode(f)
+	}
+	out := File{Version: f.Version, Aliases: map[string]Alias{}, Functions: map[string]Function{}}
+	for name, a := range f.ignoredAliases {
+		out.Aliases[name] = a
+	}
+	for name, fn := range f.ignoredFunctions {
+		out.Functions[name] = fn
+	}
+	for name, a := range f.Aliases {
+		out.Aliases[name] = a
+	}
+	for name, fn := range f.Functions {
+		out.Functions[name] = fn
+	}
+	return Encode(&out)
 }
 
 // Encode renders f as commands.json content: indented, current Version,

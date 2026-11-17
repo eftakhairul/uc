@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"strings"
 
 	"github.com/eftakhairul/uc/internal/completion"
 	"github.com/eftakhairul/uc/internal/config"
@@ -74,6 +75,22 @@ func (r *Runner) resolve(name string) (*registry.Resolved, error) {
 	return res, nil
 }
 
+// WarnShadowed warns when the built-in command name also matches a user's
+// script, alias, or function — which can never run, since built-ins win.
+// This happens when an upgrade reserves a name the user already had (as
+// `export` and `import` were).
+func (r *Runner) WarnShadowed(name string) {
+	if !reserved.Is(name) || reserved.Hidden[name] {
+		return
+	}
+	res, err := r.Reg.Resolve(name)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(r.Err, "uc: warning: your %s '%s' is hidden by the built-in 'uc %s' and can't be run — re-add it under another name, then 'uc remove %s'\n",
+		res.Kind, name, name, name)
+}
+
 // withSuggestions adds similar names to a NotFoundError.
 func (r *Runner) withSuggestions(err error) error {
 	if nf, ok := errors.AsType[*registry.NotFoundError](err); ok && nf.Similar == nil {
@@ -134,6 +151,9 @@ func (r *Runner) List() error {
 		kindWidth = max(kindWidth, len(it.Kind))
 	}
 	for _, it := range items {
+		if reserved.Is(it.Name) {
+			it.Desc = strings.TrimSpace(fmt.Sprintf("%s (hidden by the built-in 'uc %s' — rename it)", it.Desc, it.Name))
+		}
 		if it.Desc != "" {
 			fmt.Fprintf(r.Out, "%-*s  %-*s  %s\n", nameWidth, it.Name, kindWidth, it.Kind, it.Desc)
 		} else {

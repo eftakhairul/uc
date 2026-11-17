@@ -306,6 +306,37 @@ func TestLoadDropsUnsafeNames(t *testing.T) {
 	}
 }
 
+// An ignored entry is invisible to lookups but must survive an unrelated
+// write — the user was only told it was being ignored.
+func TestSaveKeepsIgnoredEntries(t *testing.T) {
+	s, _ := newTestStore(t)
+	write(t, s.Path, `{"version": 1, "aliases": {"../evil": {"command": "x"}}, "functions": {".hidden": {"body": "z"}}}`)
+	if err := s.SetAlias("gs", Alias{Command: "git status"}); err != nil {
+		t.Fatal(err)
+	}
+	got := read(t, s.Path)
+	for _, want := range []string{`"../evil"`, `".hidden"`, `"gs"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("commands.json lost %s:\n%s", want, got)
+		}
+	}
+	f, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Kind("../evil") != "" || f.Kind(".hidden") != "" {
+		t.Errorf("ignored entries are visible: %+v", f)
+	}
+	// Export (Encode) still leaves them out.
+	data, err := Encode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "evil") || strings.Contains(string(data), "hidden") {
+		t.Errorf("Encode included ignored entries:\n%s", data)
+	}
+}
+
 func TestOmitEmpty(t *testing.T) {
 	s, _ := newTestStore(t)
 	if err := s.SetAlias("gs", Alias{Command: "git status"}); err != nil {

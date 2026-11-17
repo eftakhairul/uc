@@ -54,7 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validated before anything is written: only `commands.json` and
   `scripts/<name>`, only regular files, valid names, and size limits (1 MB
   per file, 1000 entries, 50 MB total). `export` and `import` are now
-  reserved names (minor breaking change).
+  reserved names (minor breaking change): an existing script, alias, or
+  function with either name can no longer be run, and uc warns about it
+  (and marks it in `uc list`) until it is renamed or removed.
 - `-h` / `--help` and `-v` / `--version`, plus `uc <command> --help` as a
   shortcut for `uc help <command>`.
 - `uc history clear` empties the recorded history.
@@ -99,6 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_` and `-`, start with a letter, digit or `_`, and be at most 64
   characters. Existing entries with other names still run and can be
   removed.
+  Entries in `commands.json` whose name could never be invoked (e.g.
+  containing `/`) are ignored with a warning but kept in the file.
 - A broken or out-of-range `settings.json` is now a warning, and the
   defaults are used — it no longer stops every command (including
   `uc help`). `"history_size": 0` turns history off; the maximum is 10000.
@@ -106,7 +110,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--force`.
 - The picker's argument line follows shell quoting (`commit -m "two
   words"` passes one argument), and the `editor` setting is split the same
-  way, so a quoted path with spaces works.
+  way, so a quoted path with spaces works. A backslash only escapes
+  whitespace, a quote, or another backslash, so `a\.b` and Windows paths
+  such as `C:\Windows\notepad.exe` pass through unchanged; on Windows a
+  backslash outside quotes is always literal.
 - Without a terminal, `uc` explains that the picker needs one instead of
   printing a library error.
 - New directories and scripts are created `0700` (was `0755`). Existing
