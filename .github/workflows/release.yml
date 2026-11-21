@@ -1,12 +1,11 @@
 name: release
 
+# Run from Actions → release → "Run workflow", then pick the tag to release
+# from the "Use workflow from" dropdown (switch to its "Tags" tab). GitHub
+# does not support dynamically populated `choice` inputs, so the built-in ref
+# picker is the only dropdown that always lists every existing tag.
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Git tag to release (must already exist, e.g. v0.1.0)'
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -20,17 +19,23 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-      GORELEASER_CURRENT_TAG: ${{ github.event.inputs.tag }}
+      GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
     steps:
+      - name: Ensure a tag was selected
+        if: github.ref_type != 'tag'
+        run: |
+          echo "::error::Select a tag (not a branch) in the 'Use workflow from' dropdown. Got ${{ github.ref_type }} '${{ github.ref_name }}'."
+          exit 1
+
       - name: Checkout tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag }}
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
-      - name: Verify tag matches go.mod version (optional sanity check)
+      - name: Verify tag
         run: |
-          TAG="${{ github.event.inputs.tag }}"
+          TAG="${{ github.ref_name }}"
           echo "Releasing tag: $TAG"
           git describe --tags --exact-match "$TAG"
 
