@@ -1,31 +1,23 @@
 // Package commands implements the thin CLI handlers for uc's management
-// subcommands, calling into registry/executor/history/aliases/functions/help
-// as needed (architecture §3.4, §7).
+// subcommands, calling into registry/executor/history/store/help as needed
+// (architecture §3.4, §7).
 package commands
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
+	"io/fs"
 	"os"
-	"os/exec"
-	"path"
-	"path/filepath"
-	"slices"
 	"strings"
-	"time"
 
-	"github.com/eftakhairul/uc/internal/aliases"
 	"github.com/eftakhairul/uc/internal/completion"
 	"github.com/eftakhairul/uc/internal/config"
 	"github.com/eftakhairul/uc/internal/executor"
-	"github.com/eftakhairul/uc/internal/functions"
 	"github.com/eftakhairul/uc/internal/gitsync"
 	"github.com/eftakhairul/uc/internal/help"
 	"github.com/eftakhairul/uc/internal/history"
+	"github.com/eftakhairul/uc/internal/names"
 	"github.com/eftakhairul/uc/internal/ranker"
 	"github.com/eftakhairul/uc/internal/registry"
 	"github.com/eftakhairul/uc/internal/reserved"
@@ -39,47 +31,107 @@ var Version = "dev"
 type Runner struct {
 	Cfg *config.Config
 	Reg *registry.Registry
-	Out io.Writer
+	Out io.Writer // normal output
+	Err io.Writer // warnings and notes; os.Stderr when nil
+	In  io.Reader // stdin, for `uc import -`; os.Stdin when nil
 }
 
 func New(cfg *config.Config) *Runner {
-	reg := registry.New(cfg.ScriptsDir, cfg.AliasesPath(), cfg.FunctionsPath())
-	return &Runner{Cfg: cfg, Reg: reg, Out: os.Stdout}
+	return &Runner{
+		Cfg: cfg,
+		Reg: registry.New(cfg.ScriptsDir, cfg.Store()),
+		Out: os.Stdout,
+		Err: os.Stderr,
+		In:  os.Stdin,
+	}
+}
+
+func (r *Runner) errOut() io.Writer {
+	if r.Err != nil {
+		return r.Err
+	}
+	return os.Stderr
+}
+
+func (r *Runner) in() io.Reader {
+	if r.In != nil {
+		return r.In
+	}
+	return os.Stdin
+}
+
+// notef prints a "uc: note:" line to the warning stream.
+func (r *Runner) notef(format string, a ...any) {
+	fmt.Fprintf(r.errOut(), "uc: note: "+format+"\n", a...)
+}
+
+// resolve resolves name, filling in near-miss suggestions when nothing
+// matches.
+func (r *Runner) resolve(name string) (*registry.Resolved, error) {
+	res, err := r.Reg.Resolve(name)
+	if err != nil {
+		return nil, r.withSuggestions(err)
+	}
+	return res, nil
+}
+
+// WarnShadowed warns when the built-in command name also matches a user's
+// script, alias, or function — which can never run, since built-ins win.
+// This happens when an upgrade reserves a name the user already had (as
+// `export` and `import` were).
+func (r *Runner) WarnShadowed(name string) {
+	if !reserved.Is(name) || reserved.Hidden[name] {
+		return
+	}
+	res, err := r.Reg.Resolve(name)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(r.Err, "uc: warning: your %s '%s' is hidden by the built-in 'uc %s' and can't be run — re-add it under another name, then 'uc remove %s'\n",
+		res.Kind, name, name, name)
+}
+
+// withSuggestions adds similar names to a NotFoundError.
+func (r *Runner) withSuggestions(err error) error {
+	if nf, ok := errors.AsType[*registry.NotFoundError](err); ok && nf.Similar == nil {
+		nf.Similar = r.suggest(nf.Name)
+	}
+	return err
 }
 
 // Run resolves name across all three tiers (script, alias, function),
 // logs the invocation to history, then hands off to the executor. History
-// must be written before exec since process replacement means uc never
-// regains control afterward (architecture §3.1, §8.1). Returns an error
-// only if resolution or exec setup fails — on success this call never
+// is written after the run is prepared — so a run that could never start
+// isn't recorded — and before exec, since process replacement means uc
+// never regains control afterward (architecture §3.1, §8.1). Returns an
+// error only if resolution or exec setup fails; on success this call never
 // returns.
 func (r *Runner) Run(name string, args []string) error {
-	resolved, err := r.Reg.Resolve(name)
+	resolved, err := r.resolve(name)
 	if err != nil {
 		return err
 	}
 	return r.execResolved(name, resolved, args)
 }
 
-// execResolved logs entry then dispatches by kind.
 func (r *Runner) execResolved(name string, resolved *registry.Resolved, args []string) error {
-	entry := history.Entry{
-		Name: name, Args: args, Timestamp: time.Now().UTC(), Kind: string(resolved.Kind),
-	}
-	if err := history.Append(r.Cfg.HistoryPath(), entry, r.Cfg.HistorySize()); err != nil {
-		fmt.Fprintf(os.Stderr, "uc: warning: failed to record history: %v\n", err)
-	}
-
+	var plan *executor.Plan
+	var err error
 	switch resolved.Kind {
 	case registry.KindScript:
-		return executor.Run(resolved.Path, args)
+		plan, err = executor.Prepare(resolved.Path, args)
 	case registry.KindAlias:
-		return executor.RunAlias(resolved.Body, name, args)
+		plan, err = executor.PrepareAlias(resolved.Body, name, args)
 	case registry.KindFunction:
-		return executor.RunFunction(resolved.Body, name, args)
+		plan, err = executor.PrepareFunction(resolved.Body, name, args)
 	default:
 		return fmt.Errorf("unknown resolution kind %q", resolved.Kind)
 	}
+	if err != nil {
+		return err
+	}
+	r.recordHistory(name, resolved.Kind, args)
+	return plan.Exec()
 }
 
 // List implements `uc list` / `uc ls`.
@@ -89,7 +141,7 @@ func (r *Runner) List() error {
 		return err
 	}
 	if len(items) == 0 {
-		fmt.Fprintln(r.Out, "no scripts, aliases, or functions registered — add one with `uc add <path> [name]`")
+		fmt.Fprintln(r.Out, "Nothing registered yet — see 'uc help' to get started")
 		return nil
 	}
 
@@ -99,6 +151,9 @@ func (r *Runner) List() error {
 		kindWidth = max(kindWidth, len(it.Kind))
 	}
 	for _, it := range items {
+		if reserved.Is(it.Name) {
+			it.Desc = strings.TrimSpace(fmt.Sprintf("%s (hidden by the built-in 'uc %s' — rename it)", it.Desc, it.Name))
+		}
 		if it.Desc != "" {
 			fmt.Fprintf(r.Out, "%-*s  %-*s  %s\n", nameWidth, it.Name, kindWidth, it.Kind, it.Desc)
 		} else {
@@ -108,371 +163,17 @@ func (r *Runner) List() error {
 	return nil
 }
 
-// validScriptName rejects names that would escape or hide inside
-// ScriptsDir: empty, ".", "..", or anything containing a path separator.
-// Both separators are checked regardless of GOOS so a registry synced
-// across platforms stays traversal-safe.
-func validScriptName(name string) error {
-	if name == "" || name == "." || name == ".." ||
-		strings.ContainsAny(name, `/\`) || name != filepath.Base(name) {
-		return fmt.Errorf("invalid script name %q", name)
-	}
-	return nil
-}
-
-// Add implements `uc add <path|url> [name] [--force]`. An http:// or
-// https:// source is downloaded instead of copied; both paths share the
-// same name validation and overwrite/ambiguity guards.
-func (r *Runner) Add(srcPath, name string, force bool) error {
-	if isURL(srcPath) {
-		return r.addFromURL(srcPath, name, force)
-	}
-
-	info, err := os.Stat(srcPath)
-	if err != nil {
-		return fmt.Errorf("%s: %w", srcPath, err)
-	}
-	if info.IsDir() {
-		return fmt.Errorf("%s is a directory, not a file", srcPath)
-	}
-
-	if name == "" {
-		name = filepath.Base(srcPath)
-	}
-	destPath, err := r.prepareAddDest(name, force)
-	if err != nil {
-		return err
-	}
-
-	src, err := os.Open(srcPath)
-	if err != nil {
-		return fmt.Errorf("%s: %w", srcPath, err)
-	}
-	defer src.Close()
-
-	if err := installScript(destPath, src); err != nil {
-		return fmt.Errorf("copy %s -> %s: %w", srcPath, destPath, err)
-	}
-
-	fmt.Fprintf(r.Out, "added %s -> %s\n", srcPath, destPath)
-	return nil
-}
-
-// prepareAddDest validates name as a script name, ensures the uc dirs
-// exist, and — unless force — refuses to overwrite an existing script or
-// make its bare name ambiguous. It returns where the script should be
-// written.
-func (r *Runner) prepareAddDest(name string, force bool) (string, error) {
-	if err := validScriptName(name); err != nil {
-		return "", err
-	}
-	// Reserved subcommands always win at dispatch, so a script registered
-	// under one would be unrunnable — reject up front, same as alias/function
-	// add. Checked on the bare name since that's what's typed to invoke it.
-	if reserved.Is(registry.BareName(name)) {
-		return "", fmt.Errorf("%q is a reserved subcommand name", registry.BareName(name))
-	}
-
-	if err := r.Cfg.EnsureDirs(); err != nil {
-		return "", err
-	}
-
-	destPath := filepath.Join(r.Cfg.ScriptsDir, name)
-	if !force {
-		if _, err := os.Stat(destPath); err == nil {
-			return "", fmt.Errorf("%s already exists — pass --force to overwrite, or remove it with `uc remove %s`",
-				destPath, registry.BareName(name))
-		}
-		// A same-named script under another extension would make the bare
-		// name ambiguous at invocation time (script resolution tries every
-		// known extension) — reject that too.
-		existing, err := r.Reg.ResolveScript(registry.BareName(name))
-		if err == nil && existing != destPath {
-			return "", fmt.Errorf("%q would be ambiguous with %s — remove it first or pass --force",
-				registry.BareName(name), existing)
-		}
-		if _, ok := errors.AsType[*registry.AmbiguousNameError](err); ok {
-			return "", fmt.Errorf("%q is already ambiguous — remove one of the existing scripts first or pass --force: %w",
-				registry.BareName(name), err)
-		}
-	}
-	return destPath, nil
-}
-
-// installScript writes src to destPath with mode 0o755 via a temp file in
-// the same directory plus rename, so a failed copy or download never leaves
-// a partial script behind — or destroys the one --force was replacing.
-// CreateTemp makes the file 0o600; Chmod (unaffected by umask) sets 0o755.
-func installScript(destPath string, src io.Reader) (err error) {
-	tmp, err := os.CreateTemp(filepath.Dir(destPath), "."+filepath.Base(destPath)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			tmp.Close()
-			os.Remove(tmp.Name())
-		}
-	}()
-	if _, err = io.Copy(tmp, src); err != nil {
-		return err
-	}
-	if err = tmp.Chmod(0o755); err != nil {
-		return err
-	}
-	if err = tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), destPath)
-}
-
-// maxFetchBytes caps how much `uc add <url>` downloads — scripts are small,
-// and anything bigger is almost certainly the wrong URL.
-const maxFetchBytes = 1 << 20
-
-// httpClient fetches scripts for `uc add <url>`. Redirects are followed
-// (gist.github.com/.../raw redirects to gist.githubusercontent.com).
-var httpClient = &http.Client{Timeout: 30 * time.Second}
-
-// isURL reports whether an `uc add` source should be downloaded rather
-// than read from disk.
-func isURL(s string) bool {
-	lower := strings.ToLower(s)
-	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
-}
-
-// rawURL turns a user-supplied URL into the one to download: a
-// gist.github.com page URL gets "/raw" appended (which serves the gist's
-// first file); every other http(s) URL passes through unchanged.
-func rawURL(raw string) (string, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", fmt.Errorf("invalid URL %q: %w", raw, err)
-	}
-	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return "", fmt.Errorf("invalid URL %q: want an http:// or https:// URL with a host", raw)
-	}
-	if strings.EqualFold(u.Hostname(), "gist.github.com") &&
-		!strings.HasSuffix(u.Path, "/raw") && !strings.Contains(u.Path, "/raw/") {
-		u.Path = strings.TrimSuffix(u.Path, "/") + "/raw"
-		u.RawPath = ""
-	}
-	return u.String(), nil
-}
-
-// nameFromURL derives a script name from the last path segment of a
-// (rewritten) URL. Query strings and fragments are ignored by construction.
-func nameFromURL(fetchURL string) (string, error) {
-	u, err := url.Parse(fetchURL)
-	if err != nil {
-		return "", err
-	}
-	name := path.Base(u.Path)
-	switch name {
-	case "", "/", ".", "raw":
-		return "", fmt.Errorf("cannot derive a name from this URL, pass one explicitly: uc add <url> <name>")
-	}
-	return name, nil
-}
-
-// fetchScript downloads fetchURL, requiring a 200 response and a
-// non-empty body no larger than maxFetchBytes.
-func fetchScript(fetchURL string) ([]byte, error) {
-	resp, err := httpClient.Get(fetchURL)
-	if err != nil {
-		// *url.Error repeats the method and URL; unwrap it so the URL
-		// appears once.
-		if uerr, ok := errors.AsType[*url.Error](err); ok {
-			err = uerr.Err
-		}
-		return nil, fmt.Errorf("fetch %s: %w", fetchURL, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetch %s: %s", fetchURL, resp.Status)
-	}
-	// Read one byte past the cap so an oversized body is an error rather
-	// than a silently truncated (and likely broken) script.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("fetch %s: %w", fetchURL, err)
-	}
-	if len(body) > maxFetchBytes {
-		return nil, fmt.Errorf("fetch %s: response is larger than %d bytes", fetchURL, maxFetchBytes)
-	}
-	if len(body) == 0 {
-		return nil, fmt.Errorf("fetch %s: empty response", fetchURL)
-	}
-	return body, nil
-}
-
-// addFromURL implements the URL form of `uc add`. The name and overwrite
-// guards run before the download, so a doomed add costs no network round
-// trip, and nothing is written unless the fetch fully succeeds.
-func (r *Runner) addFromURL(rawurl, name string, force bool) error {
-	fetchURL, err := rawURL(rawurl)
-	if err != nil {
-		return err
-	}
-	if name == "" {
-		if name, err = nameFromURL(fetchURL); err != nil {
-			return err
-		}
-	}
-	destPath, err := r.prepareAddDest(name, force)
-	if err != nil {
-		return err
-	}
-
-	body, err := fetchScript(fetchURL)
-	if err != nil {
-		return err
-	}
-	if err := installScript(destPath, bytes.NewReader(body)); err != nil {
-		return fmt.Errorf("write %s: %w", destPath, err)
-	}
-
-	fmt.Fprintf(r.Out, "added %s -> %s\n", rawurl, destPath)
-	fmt.Fprintf(r.Out, "note: review it before first run — uc which %s\n", registry.BareName(name))
-	return nil
-}
-
-// scriptTemplate is the scaffold `uc new` writes for one --lang value.
-type scriptTemplate struct {
-	lang    string
-	ext     string
-	shebang string
-	// preamble is language-specific boilerplate below the metadata block.
-	preamble string
-}
-
-// templates lists the supported --lang values, in the order shown in usage
-// and error text. All five languages use "#" comments, so the metadata block
-// ExtractMeta reads back is identical across them — only the shebang and
-// preamble differ. A slice (not a map) keeps that order stable.
-var templates = []scriptTemplate{
-	{lang: "sh", ext: ".sh", shebang: "#!/usr/bin/env bash", preamble: "set -euo pipefail\n"},
-	{lang: "py", ext: ".py", shebang: "#!/usr/bin/env python3"},
-	{lang: "js", ext: ".js", shebang: "#!/usr/bin/env node"},
-	{lang: "rb", ext: ".rb", shebang: "#!/usr/bin/env ruby"},
-	{lang: "pl", ext: ".pl", shebang: "#!/usr/bin/env perl"},
-}
-
-func lookupTemplate(lang string) (scriptTemplate, bool) {
-	for _, t := range templates {
-		if t.lang == lang {
-			return t, true
-		}
-	}
-	return scriptTemplate{}, false
-}
-
-// langList renders the valid --lang values for usage and error messages.
-func langList() string {
-	ls := make([]string, len(templates))
-	for i, t := range templates {
-		ls[i] = t.lang
-	}
-	return strings.Join(ls, "|")
-}
-
-// render fills the template for the name the script will be invoked by.
-func (t scriptTemplate) render(name string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n", t.shebang)
-	b.WriteString("# @desc:\n")
-	fmt.Fprintf(&b, "# @usage: %s <args>\n", name)
-	fmt.Fprintf(&b, "# @example: %s\n\n", name)
-	if t.preamble != "" {
-		fmt.Fprintf(&b, "%s\n", t.preamble)
-	}
-	return b.String()
-}
-
-// New implements `uc new <name> [--lang sh|py|js|rb|pl]` — writes a language
-// template straight into the scripts directory and opens $EDITOR on it, so
-// saving the file is what registers it. The editor runs as a child process
-// (not process replacement) because uc needs control back to decide whether
-// anything was actually written: an untouched template counts as an abort
-// and leaves nothing behind, mirroring `git commit` with an unedited message.
-func (r *Runner) New(name, lang string) error {
-	if err := validScriptName(name); err != nil {
-		return err
-	}
-	// Checked on the bare name since that's what's typed to invoke it —
-	// same reasoning as Add.
-	bare := registry.BareName(name)
-	if reserved.Is(bare) {
-		return fmt.Errorf("%q is a reserved subcommand name", bare)
-	}
-	tmpl, ok := lookupTemplate(lang)
-	if !ok {
-		return fmt.Errorf("unknown --lang %q (want %s)", lang, langList())
-	}
-
-	// Any existing resolution blocks: a script under another extension, an
-	// alias, or a function would shadow the new file or be shadowed by it.
-	// Not-found is the only good outcome here; an ambiguous name (or a
-	// broken store) is surfaced as-is.
-	if resolved, err := r.Reg.Resolve(bare); err == nil {
-		return fmt.Errorf("%q already exists (%s) — edit it with `uc edit %s`", bare, resolved.Kind, bare)
-	} else if _, notFound := errors.AsType[*registry.NotFoundError](err); !notFound {
-		return err
-	}
-
-	if err := r.Cfg.EnsureDirs(); err != nil {
-		return err
-	}
-	filename := name + tmpl.ext
-	if filepath.Ext(name) == tmpl.ext {
-		// `uc new killport.sh` shouldn't produce killport.sh.sh.
-		filename = name
-	}
-	destPath := filepath.Join(r.Cfg.ScriptsDir, filename)
-
-	initial := tmpl.render(bare)
-	if err := os.WriteFile(destPath, []byte(initial), 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", destPath, err)
-	}
-	// WriteFile's mode is subject to umask, so set the exec bit explicitly
-	// (same as Add) — extensionless scripts are run directly.
-	if err := os.Chmod(destPath, 0o755); err != nil {
-		return fmt.Errorf("chmod %s: %w", destPath, err)
-	}
-
-	if err := r.runEditor(destPath); err != nil {
-		os.Remove(destPath)
-		return fmt.Errorf("editor exited with an error, nothing registered: %w", err)
-	}
-
-	edited, err := os.ReadFile(destPath)
-	if err != nil {
-		os.Remove(destPath)
-		return fmt.Errorf("read %s: %w", destPath, err)
-	}
-	if string(edited) == initial {
-		if err := os.Remove(destPath); err != nil {
-			return fmt.Errorf("remove %s: %w", destPath, err)
-		}
-		fmt.Fprintln(r.Out, "aborted, nothing registered")
-		return nil
-	}
-
-	fmt.Fprintf(r.Out, "created %s — run it with: uc %s\n", destPath, bare)
-	return nil
-}
-
 // Remove implements `uc remove` / `uc rm` — resolves name across all three
 // kinds and unregisters it (architecture §3.4).
 func (r *Runner) Remove(name string) error {
-	resolved, err := r.Reg.Resolve(name)
+	resolved, err := r.resolve(name)
 	if err != nil {
 		return err
 	}
 	switch resolved.Kind {
 	case registry.KindScript:
 		if err := os.Remove(resolved.Path); err != nil {
-			return fmt.Errorf("remove %s: %w", resolved.Path, err)
+			return fmt.Errorf("cannot remove %s: %s", resolved.Path, reason(err))
 		}
 		fmt.Fprintf(r.Out, "removed %s\n", resolved.Path)
 		return nil
@@ -486,9 +187,11 @@ func (r *Runner) Remove(name string) error {
 }
 
 // Which implements `uc which <name>` — reports the resolved kind alongside
-// the resolution detail (architecture §3.2, §3.4).
+// the resolution detail (architecture §3.2, §3.4). An alias or function
+// body is printed with control characters escaped: it is what will run, so
+// it must be shown faithfully, but never interpreted by the terminal.
 func (r *Runner) Which(name string) error {
-	resolved, err := r.Reg.Resolve(name)
+	resolved, err := r.resolve(name)
 	if err != nil {
 		return err
 	}
@@ -496,9 +199,9 @@ func (r *Runner) Which(name string) error {
 	case registry.KindScript:
 		fmt.Fprintf(r.Out, "%s (script)\n", resolved.Path)
 	case registry.KindAlias:
-		fmt.Fprintf(r.Out, "%s (alias): %s\n", name, resolved.Body)
+		fmt.Fprintf(r.Out, "%s (alias): %s\n", name, names.EscapeControl(resolved.Body))
 	case registry.KindFunction:
-		fmt.Fprintf(r.Out, "%s (function): %s\n", name, resolved.Body)
+		fmt.Fprintf(r.Out, "%s (function): %s\n", name, names.EscapeControl(resolved.Body))
 	}
 	return nil
 }
@@ -507,7 +210,7 @@ func (r *Runner) Which(name string) error {
 // (process replacement, does not return on success). Aliases/functions:
 // delegate to the temp-file round-trip (architecture §3.4).
 func (r *Runner) Edit(name string) error {
-	resolved, err := r.Reg.Resolve(name)
+	resolved, err := r.resolve(name)
 	if err != nil {
 		return err
 	}
@@ -517,16 +220,14 @@ func (r *Runner) Edit(name string) error {
 	case registry.KindAlias:
 		return r.AliasEdit(name)
 	}
-
-	editorCmd := r.Cfg.EditorCommand()
-	argv := append(strings.Fields(editorCmd), resolved.Path)
-	if len(argv) == 0 {
-		return fmt.Errorf("empty editor command")
+	argv, err := r.editorArgv(resolved.Path)
+	if err != nil {
+		return err
 	}
 	return executor.ExecReplace(argv)
 }
 
-// Completion implements `uc completion <bash|zsh>`.
+// Completion implements `uc completion <bash|zsh|fish>`.
 func (r *Runner) Completion(shell string) error {
 	script, err := completion.Script(shell)
 	if err != nil {
@@ -565,398 +266,80 @@ func (r *Runner) Complete(partial string, describe bool) error {
 	return nil
 }
 
-// History implements `uc history [n]` — prints the last n entries
-// (default/max: the configured history_size), most recent first, with
-// relative timestamps and kind.
-func (r *Runner) History(n int) error {
-	entries, err := history.Load(r.Cfg.HistoryPath())
-	if err != nil {
-		return err
-	}
-	limit := r.Cfg.HistorySize()
-	if n <= 0 || n > limit {
-		n = limit
-	}
-
-	// entries is oldest-first; reverse for most-recent-first, capped to n.
-	recent := entries
-	if len(recent) > n {
-		recent = recent[len(recent)-n:]
-	}
-
-	if len(recent) == 0 {
-		fmt.Fprintln(r.Out, "no history yet")
-		return nil
-	}
-
-	now := time.Now()
-	for i := range slices.Backward(recent) {
-		e := recent[i]
-		idx := len(recent) - i
-		args := strings.Join(e.Args, " ")
-		if args != "" {
-			args = " " + args
-		}
-		kind := e.Kind
-		if kind == "" {
-			kind = "script"
-		}
-		fmt.Fprintf(r.Out, "%2d  %s%s  (%s, %s)\n", idx, e.Name, args, kind, relativeTime(now, e.Timestamp))
-	}
-	return nil
-}
-
-// HistoryRun implements `uc history run <n>` — re-executes the nth most
-// recent entry (1-indexed) by re-resolving its name fresh (so edits to an
-// alias/function definition since the original run are picked up) with its
-// original args. Does not return on success.
-func (r *Runner) HistoryRun(n int) error {
-	entries, err := history.Load(r.Cfg.HistoryPath())
-	if err != nil {
-		return err
-	}
-	if n < 1 || n > len(entries) {
-		return fmt.Errorf("no history entry #%d", n)
-	}
-	// entries is oldest-first; #1 is the most recent, i.e. the last element.
-	e := entries[len(entries)-n]
-	return r.Run(e.Name, e.Args)
-}
-
-func relativeTime(now, t time.Time) string {
-	d := now.Sub(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		m := int(d.Minutes())
-		return fmt.Sprintf("%dm ago", m)
-	case d < 24*time.Hour:
-		h := int(d.Hours())
-		return fmt.Sprintf("%dh ago", h)
-	case d < 48*time.Hour:
-		return "yesterday"
-	default:
-		days := int(d.Hours() / 24)
-		return fmt.Sprintf("%dd ago", days)
-	}
-}
-
-// AliasAdd implements `uc alias add <name> <command...> [--desc "..."]` —
-// command is arbitrary shell text, the same idea as a bash alias (e.g.
-// `alias gs='git status'`); it isn't required to be a registered uc script
-// (architecture §3.2b).
-func (r *Runner) AliasAdd(name, command, desc string) error {
-	if reserved.Is(name) {
-		return fmt.Errorf("%q is a reserved subcommand name", name)
-	}
-	a := aliases.Alias{Command: command}
-	if desc != "" {
-		a.Desc = &desc
-	}
-	if err := aliases.Add(r.Cfg.AliasesPath(), name, a); err != nil {
-		return err
-	}
-	fmt.Fprintf(r.Out, "added alias %s -> %s\n", name, command)
-	warnIfAppendHazard(command)
-	r.warnIfShadowed(name, registry.KindAlias)
-	return nil
-}
-
-// warnIfAppendHazard notes on stderr when the executor's `"$@"` append
-// would misbehave against this command text — a comment or a trailing
-// control operator silently swallows or detaches the user's args
-// (architecture §3.2b). A warning, not a rejection: the composition may
-// still be what the user meant.
-func warnIfAppendHazard(command string) {
-	if hazard := aliases.AppendHazard(command); hazard != "" {
-		fmt.Fprintf(os.Stderr, "uc: note: %s — uc appends your invocation args as \"$@\" at the end\n", hazard)
-	}
-}
-
-// warnIfShadowed prints a note if name won't actually resolve to the kind
-// just registered — e.g. a new function shadowed by a same-named script,
-// which always wins under the fixed script > alias > function precedence
-// (architecture §3.2).
-func (r *Runner) warnIfShadowed(name string, kind registry.Kind) {
-	resolved, err := r.Reg.Resolve(name)
-	if err == nil && resolved.Kind != kind {
-		fmt.Fprintf(os.Stderr, "uc: note: %s is shadowed by a %s of the same name — `uc %s` will run the %s\n",
-			name, resolved.Kind, name, resolved.Kind)
-	}
-}
-
-// AliasEdit implements `uc alias edit <name>` — the same temp-file
-// round-trip as FunctionEdit, editing the alias's command text.
-// Desc/usage/examples are preserved as-is. The result is trimmed of
-// surrounding whitespace: the executor appends `"$@"` to the command text
-// (architecture §3.2b), and an editor's trailing newline would otherwise
-// push that append onto its own line as a separate command.
-func (r *Runner) AliasEdit(name string) error {
-	m, err := aliases.Load(r.Cfg.AliasesPath())
-	if err != nil {
-		return err
-	}
-	a, ok := m[name]
-	if !ok {
-		return fmt.Errorf("no alias named %q", name)
-	}
-
-	edited, err := r.editViaTempFile("uc-alias-*.sh", a.Command)
-	if err != nil {
-		return err
-	}
-	a.Command = strings.TrimSpace(edited)
-	if err := aliases.Add(r.Cfg.AliasesPath(), name, a); err != nil {
-		return err
-	}
-	fmt.Fprintf(r.Out, "updated alias %s -> %s\n", name, a.Command)
-	warnIfAppendHazard(a.Command)
-	return nil
-}
-
-// AliasRemove implements `uc alias remove <name>`.
-func (r *Runner) AliasRemove(name string) error {
-	if err := aliases.Remove(r.Cfg.AliasesPath(), name); err != nil {
-		return err
-	}
-	fmt.Fprintf(r.Out, "removed alias %s\n", name)
-	return nil
-}
-
-// AliasList implements `uc alias list` — a filtered view of `uc list`.
-func (r *Runner) AliasList() error {
-	m, err := aliases.Load(r.Cfg.AliasesPath())
-	if err != nil {
-		return err
-	}
-	names := aliases.Names(m)
-	if len(names) == 0 {
-		fmt.Fprintln(r.Out, "no aliases registered — add one with `uc alias add <name> <command...>`")
-		return nil
-	}
-	nameWidth := 0
-	for _, n := range names {
-		nameWidth = max(nameWidth, len(n))
-	}
-	for _, n := range names {
-		desc := ""
-		if a := m[n]; a.Desc != nil {
-			desc = *a.Desc
-		}
-		if desc != "" {
-			fmt.Fprintf(r.Out, "%-*s  %s\n", nameWidth, n, desc)
-		} else {
-			fmt.Fprintf(r.Out, "%-*s\n", nameWidth, n)
-		}
-	}
-	return nil
-}
-
-// FunctionAdd implements `uc function add <name> <body> [--desc "..."]`.
-func (r *Runner) FunctionAdd(name, body, desc string) error {
-	if reserved.Is(name) {
-		return fmt.Errorf("%q is a reserved subcommand name", name)
-	}
-	f := functions.Function{Body: body}
-	if desc != "" {
-		f.Desc = &desc
-	}
-	if err := functions.Add(r.Cfg.FunctionsPath(), name, f); err != nil {
-		return err
-	}
-	fmt.Fprintf(r.Out, "added function %s\n", name)
-	r.warnIfShadowed(name, registry.KindFunction)
-	return nil
-}
-
-// FunctionRemove implements `uc function remove <name>`.
-func (r *Runner) FunctionRemove(name string) error {
-	if err := functions.Remove(r.Cfg.FunctionsPath(), name); err != nil {
-		return err
-	}
-	fmt.Fprintf(r.Out, "removed function %s\n", name)
-	return nil
-}
-
-// FunctionList implements `uc function list` — a filtered view of `uc list`.
-func (r *Runner) FunctionList() error {
-	m, err := functions.Load(r.Cfg.FunctionsPath())
-	if err != nil {
-		return err
-	}
-	names := functions.Names(m)
-	if len(names) == 0 {
-		fmt.Fprintln(r.Out, `no functions registered — add one with "uc function add <name> <body>"`)
-		return nil
-	}
-	nameWidth := 0
-	for _, n := range names {
-		nameWidth = max(nameWidth, len(n))
-	}
-	for _, n := range names {
-		desc := ""
-		if f := m[n]; f.Desc != nil {
-			desc = *f.Desc
-		}
-		if desc != "" {
-			fmt.Fprintf(r.Out, "%-*s  %s\n", nameWidth, n, desc)
-		} else {
-			fmt.Fprintf(r.Out, "%-*s\n", nameWidth, n)
-		}
-	}
-	return nil
-}
-
-// FunctionEdit implements `uc function edit <name>` — a temp-file
-// round-trip of the body through $EDITOR (architecture §3.2c).
-func (r *Runner) FunctionEdit(name string) error {
-	m, err := functions.Load(r.Cfg.FunctionsPath())
-	if err != nil {
-		return err
-	}
-	f, ok := m[name]
-	if !ok {
-		return fmt.Errorf("no function named %q", name)
-	}
-
-	edited, err := r.editViaTempFile("uc-function-*.sh", f.Body)
-	if err != nil {
-		return err
-	}
-	f.Body = edited
-	if err := functions.Add(r.Cfg.FunctionsPath(), name, f); err != nil {
-		return err
-	}
-	fmt.Fprintf(r.Out, "updated function %s\n", name)
-	return nil
-}
-
-// editViaTempFile writes initial to a temp file, opens $EDITOR on it, and
-// on clean exit reads the edited content back (deleting the temp file).
-// This can't use process replacement like other edit paths since uc needs
-// to regain control afterward to persist the result; a non-zero editor
-// exit aborts, and nothing should be saved (architecture §6, decision 17).
-func (r *Runner) editViaTempFile(pattern, initial string) (string, error) {
-	tmp, err := os.CreateTemp("", pattern)
-	if err != nil {
-		return "", fmt.Errorf("create temp file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmp.WriteString(initial); err != nil {
-		tmp.Close()
-		return "", fmt.Errorf("write temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return "", fmt.Errorf("close temp file: %w", err)
-	}
-
-	if err := r.runEditor(tmpPath); err != nil {
-		return "", fmt.Errorf("editor exited with an error, nothing saved: %w", err)
-	}
-
-	edited, err := os.ReadFile(tmpPath)
-	if err != nil {
-		return "", fmt.Errorf("read edited content: %w", err)
-	}
-	return string(edited), nil
-}
-
-// runEditor opens $EDITOR on path as a child process, wiring through the
-// terminal, and waits for it. Used by the flows that need control back
-// afterward to validate or persist the result — unlike `uc edit` on a
-// script, which replaces the process outright.
-func (r *Runner) runEditor(path string) error {
-	argv := append(strings.Fields(r.Cfg.EditorCommand()), path)
-	if len(argv) == 0 {
-		return fmt.Errorf("empty editor command")
-	}
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return cmd.Run()
-}
-
-// Help implements `uc help` (no arg) and `uc help <subcommand|name>`
+// Help implements `uc help` (no arg) and `uc help <command|name>`
 // (architecture §3.5). Resolution order mirrors the main dispatch order:
 // reserved subcommands first, then Registry resolution.
+//
+// An unknown name is an error (exit 1, not the 127 of `uc <unknown>`,
+// since nothing was meant to run), with the same wording and suggestions.
 func (r *Runner) Help(arg string) error {
 	if arg == "" {
-		fmt.Fprint(r.Out, helpText)
+		fmt.Fprint(r.Out, help.Overview())
 		return nil
 	}
-
 	if reserved.Is(arg) && !reserved.Hidden[arg] {
 		if text, ok := help.Static(arg); ok {
 			fmt.Fprint(r.Out, text)
 			return nil
 		}
 	}
-
-	resolved, err := r.Reg.Resolve(arg)
+	resolved, err := r.resolve(arg)
 	if err != nil {
-		fmt.Fprintf(r.Out, "No help available for %q\n", arg)
-		return nil
+		if nf, ok := errors.AsType[*registry.NotFoundError](err); ok {
+			return errors.New(nf.Error())
+		}
+		return err
 	}
 	fmt.Fprint(r.Out, help.RenderMeta(resolved.Name, resolved.Desc, resolved.Usage, resolved.Examples))
 	return nil
 }
 
-const helpText = `uc - personal CLI script dispatcher
-
-Usage:
-  uc <name> [args...]     Run a registered script, alias, or function
-  uc                      Launch the interactive picker
-
-Management commands:
-  uc list, uc ls          List registered scripts, aliases, and functions
-  uc add <path|url> [name] [--force]   Register a script (local file or http(s) URL)
-  uc new <name> [--lang sh|py|js|rb|pl]   Scaffold a new script in $EDITOR
-  uc remove <name>, rm    Unregister a script, alias, or function
-  uc which <name>         Print what a name resolves to, and its kind
-  uc edit <name>          Open a script, alias, or function in $EDITOR
-  uc completion <shell>   Print a completion script (bash|zsh|fish)
-  uc history [n]          Show the last n invocations (default: history_size)
-  uc history run <n>      Re-run the nth history entry
-  uc alias add <name> <command...> [--desc "..."]   Create an alias to a shell command
-  uc alias remove <name>  Delete an alias
-  uc alias list           List aliases only
-  uc alias edit <name>    Edit an alias's command in $EDITOR
-  uc function add <name> <body> [--desc "..."]   Create an inline function
-  uc function remove <name>   Delete a function
-  uc function list        List functions only
-  uc function edit <name> Edit a function's body in $EDITOR
-  uc sync init <remote-url>   Set up git-backed sync with a remote you own
-  uc sync push            Publish local scripts/aliases/functions
-  uc sync pull [--force]  Adopt the remote's scripts/aliases/functions
-  uc sync status          Show the remote, unpushed changes, ahead/behind
-  uc help                 Show this help
-  uc help <subcommand|name>   Help for a subcommand, script, alias, or function
-  uc version               Print version
-`
-
 // SyncInit implements `uc sync init <remote-url>`.
 func (r *Runner) SyncInit(remoteURL string) error {
-	return gitsync.New(r.Cfg, r.Out).Init(remoteURL)
+	return r.syncer().Init(remoteURL)
 }
 
 // SyncPush implements `uc sync push`.
 func (r *Runner) SyncPush() error {
-	return gitsync.New(r.Cfg, r.Out).Push()
+	return r.syncer().Push()
 }
 
 // SyncPull implements `uc sync pull [--force]`.
 func (r *Runner) SyncPull(force bool) error {
-	return gitsync.New(r.Cfg, r.Out).Pull(force)
+	return r.syncer().Pull(force)
 }
 
 // SyncStatus implements `uc sync status`.
 func (r *Runner) SyncStatus() error {
-	return gitsync.New(r.Cfg, r.Out).Status()
+	return r.syncer().Status()
+}
+
+func (r *Runner) syncer() *gitsync.Syncer {
+	s := gitsync.New(r.Cfg, r.Out)
+	s.Warn = r.errOut()
+	return s
 }
 
 // PrintVersion implements `uc version`.
 func (r *Runner) PrintVersion() error {
 	fmt.Fprintln(r.Out, Version)
 	return nil
+}
+
+// reason turns a file error into a short plain-language cause, without
+// the operation or path os.PathError repeats.
+func reason(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "no such file"
+	case errors.Is(err, fs.ErrPermission):
+		return "permission denied"
+	}
+	if pe, ok := errors.AsType[*fs.PathError](err); ok {
+		return pe.Err.Error()
+	}
+	if le, ok := errors.AsType[*os.LinkError](err); ok {
+		return le.Err.Error()
+	}
+	return err.Error()
 }

@@ -29,8 +29,11 @@ func newTestRunner(t *testing.T) (*Runner, *bytes.Buffer) {
 		ConfigDir:  filepath.Join(t.TempDir(), "config"),
 	}
 	out := &bytes.Buffer{}
-	reg := registry.New(cfg.ScriptsDir, cfg.AliasesPath(), cfg.FunctionsPath())
-	return &Runner{Cfg: cfg, Reg: reg, Out: out}, out
+	r := New(cfg)
+	r.Out = out
+	r.Err = &bytes.Buffer{}
+	cfg.Store().Warn = r.Err
+	return r, out
 }
 
 // writeScript creates a source script outside the registry, ready for Add.
@@ -48,13 +51,13 @@ func TestAddRejectsTraversalNames(t *testing.T) {
 	src := writeScript(t, t.TempDir(), "x.sh", "#!/bin/sh\necho hi\n")
 
 	for _, name := range []string{"../evil", "a/b", `a\b`, ".", ".."} {
-		err := r.Add(src, name, false)
+		err := r.Add(src, name, false, false)
 		if err == nil {
 			t.Errorf("Add(name=%q): want error, got nil", name)
 			continue
 		}
-		if !strings.Contains(err.Error(), "invalid script name") {
-			t.Errorf("Add(name=%q) error = %q, want invalid-script-name", name, err)
+		if !strings.Contains(err.Error(), "invalid name") {
+			t.Errorf("Add(name=%q) error = %q, want invalid-name", name, err)
 		}
 	}
 
@@ -77,10 +80,10 @@ func TestAddRejectsDuplicate(t *testing.T) {
 	src1 := writeScript(t, dir, "one.sh", "#!/bin/sh\necho one\n")
 	src2 := writeScript(t, dir, "two.sh", "#!/bin/sh\necho two\n")
 
-	if err := r.Add(src1, "dup", false); err != nil {
+	if err := r.Add(src1, "dup", false, false); err != nil {
 		t.Fatalf("first Add: %v", err)
 	}
-	err := r.Add(src2, "dup", false)
+	err := r.Add(src2, "dup", false, false)
 	if err == nil {
 		t.Fatal("duplicate Add: want error, got nil")
 	}
@@ -104,10 +107,10 @@ func TestAddForceOverwrites(t *testing.T) {
 	src1 := writeScript(t, dir, "one.sh", "#!/bin/sh\necho one\n")
 	src2 := writeScript(t, dir, "two.sh", "#!/bin/sh\necho two\n")
 
-	if err := r.Add(src1, "dup", false); err != nil {
+	if err := r.Add(src1, "dup", false, false); err != nil {
 		t.Fatalf("first Add: %v", err)
 	}
-	if err := r.Add(src2, "dup", true); err != nil {
+	if err := r.Add(src2, "dup", true, false); err != nil {
 		t.Fatalf("force Add: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(r.Cfg.ScriptsDir, "dup"))
@@ -125,10 +128,10 @@ func TestAddRejectsCrossExtensionAmbiguity(t *testing.T) {
 	srcSh := writeScript(t, dir, "tool.sh", "#!/bin/sh\necho sh\n")
 	srcPy := writeScript(t, dir, "tool.py", "print('py')\n")
 
-	if err := r.Add(srcSh, "", false); err != nil {
+	if err := r.Add(srcSh, "", false, false); err != nil {
 		t.Fatalf("Add tool.sh: %v", err)
 	}
-	err := r.Add(srcPy, "", false)
+	err := r.Add(srcPy, "", false, false)
 	if err == nil {
 		t.Fatal("Add tool.py beside tool.sh: want ambiguity error, got nil")
 	}
@@ -136,7 +139,7 @@ func TestAddRejectsCrossExtensionAmbiguity(t *testing.T) {
 		t.Errorf("Add error = %q, want ambiguous", err)
 	}
 
-	if err := r.Add(srcPy, "", true); err != nil {
+	if err := r.Add(srcPy, "", true, false); err != nil {
 		t.Fatalf("force Add tool.py: %v", err)
 	}
 }
@@ -145,7 +148,7 @@ func TestAddDerivedNameAndOutput(t *testing.T) {
 	r, out := newTestRunner(t)
 	src := writeScript(t, t.TempDir(), "killport.sh", "#!/bin/sh\n# @desc: kills a port\necho ok\n")
 
-	if err := r.Add(src, "", false); err != nil {
+	if err := r.Add(src, "", false, false); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if !strings.Contains(out.String(), "added") {
@@ -258,10 +261,11 @@ func TestNewRejectsBadNames(t *testing.T) {
 		name string
 		want string
 	}{
-		{"list", "reserved subcommand name"},
-		{"new", "reserved subcommand name"},
-		{"../evil", "invalid script name"},
-		{"a/b", "invalid script name"},
+		{"list", "'list' is a reserved uc command"},
+		{"new", "'new' is a reserved uc command"},
+		{"../evil", "invalid name"},
+		{"a/b", "invalid name"},
+		{"a b", "invalid name"},
 	}
 	for _, c := range cases {
 		r, _ := newTestRunner(t)
@@ -333,7 +337,7 @@ func TestNewRejectsUnknownLang(t *testing.T) {
 	if err == nil {
 		t.Fatal("New with an unknown lang: want error, got nil")
 	}
-	for _, want := range []string{`unknown --lang "go"`, "sh|py|js|rb|pl"} {
+	for _, want := range []string{`unknown --lang 'go'`, "sh|py|js|rb|pl"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %q, want it to contain %q", err, want)
 		}
@@ -630,7 +634,7 @@ func TestAddURLInstallsScript(t *testing.T) {
 	r, out := newTestRunner(t)
 
 	srcURL := srv.URL + "/scripts/killport.sh"
-	if err := r.Add(srcURL, "", false); err != nil {
+	if err := r.Add(srcURL, "", false, false); err != nil {
 		t.Fatalf("Add(url): %v", err)
 	}
 	if hits.Load() != 1 {
@@ -649,8 +653,8 @@ func TestAddURLInstallsScript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o755 {
-		t.Errorf("dest mode = %v, want 0755", info.Mode().Perm())
+	if runtime.GOOS != "windows" && info.Mode().Perm() != config.ScriptMode {
+		t.Errorf("dest mode = %v, want %o", info.Mode().Perm(), config.ScriptMode)
 	}
 
 	got := out.String()
@@ -677,7 +681,7 @@ func TestAddURLExplicitNameOverridesDerived(t *testing.T) {
 	srv, _ := scriptServer(t, map[string]string{"/raw/abc/tool.sh": "#!/bin/sh\necho hi\n"})
 	r, out := newTestRunner(t)
 
-	if err := r.Add(srv.URL+"/raw/abc/tool.sh", "hello", false); err != nil {
+	if err := r.Add(srv.URL+"/raw/abc/tool.sh", "hello", false, false); err != nil {
 		t.Fatalf("Add(url, name): %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(r.Cfg.ScriptsDir, "hello")); err != nil {
@@ -695,7 +699,7 @@ func TestAddURLNameIgnoresQueryAndFragment(t *testing.T) {
 	srv, _ := scriptServer(t, map[string]string{"/tool.sh": "#!/bin/sh\necho hi\n"})
 	r, _ := newTestRunner(t)
 
-	if err := r.Add(srv.URL+"/tool.sh?token=abc#top", "", false); err != nil {
+	if err := r.Add(srv.URL+"/tool.sh?token=abc#top", "", false, false); err != nil {
 		t.Fatalf("Add(url with query): %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(r.Cfg.ScriptsDir, "tool.sh")); err != nil {
@@ -713,11 +717,11 @@ func TestAddURLNon200WritesNothing(t *testing.T) {
 			t.Cleanup(srv.Close)
 			r, out := newTestRunner(t)
 
-			err := r.Add(srv.URL+"/tool.sh", "", false)
+			err := r.Add(srv.URL+"/tool.sh", "", false, false)
 			if err == nil {
 				t.Fatal("want error, got nil")
 			}
-			if !strings.Contains(err.Error(), "fetch") || !strings.Contains(err.Error(), fmt.Sprint(status)) {
+			if !strings.Contains(err.Error(), "cannot download") || !strings.Contains(err.Error(), fmt.Sprint(status)) {
 				t.Errorf("error = %q, want fetch error carrying status %d", err, status)
 			}
 			assertNoScripts(t, r)
@@ -742,7 +746,7 @@ func TestAddURLFollowsRedirect(t *testing.T) {
 	t.Cleanup(srv.Close)
 	r, _ := newTestRunner(t)
 
-	if err := r.Add(srv.URL+"/user/abc123/raw", "killport", false); err != nil {
+	if err := r.Add(srv.URL+"/user/abc123/raw", "killport", false, false); err != nil {
 		t.Fatalf("Add(redirecting url): %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(r.Cfg.ScriptsDir, "killport"))
@@ -759,7 +763,7 @@ func TestAddURLUnderivableNameSkipsFetch(t *testing.T) {
 	r, _ := newTestRunner(t)
 
 	for _, u := range []string{srv.URL, srv.URL + "/", srv.URL + "/raw"} {
-		err := r.Add(u, "", false)
+		err := r.Add(u, "", false, false)
 		if err == nil {
 			t.Errorf("Add(%q): want error, got nil", u)
 			continue
@@ -774,7 +778,7 @@ func TestAddURLUnderivableNameSkipsFetch(t *testing.T) {
 	assertNoScripts(t, r)
 
 	// The same URL works once a name is given.
-	if err := r.Add(srv.URL+"/", "rooted", false); err != nil {
+	if err := r.Add(srv.URL+"/", "rooted", false, false); err != nil {
 		t.Fatalf("Add(url, explicit name): %v", err)
 	}
 }
@@ -786,12 +790,12 @@ func TestAddURLRejectsBadNamesBeforeFetch(t *testing.T) {
 	for _, tc := range []struct {
 		url, name, wantErr string
 	}{
-		{srv.URL + "/ok.sh", "../evil", "invalid script name"},
-		{srv.URL + "/ok.sh", "a/b", "invalid script name"},
+		{srv.URL + "/ok.sh", "../evil", "invalid name"},
+		{srv.URL + "/ok.sh", "a/b", "invalid name"},
 		{srv.URL + "/list", "", "reserved"},
 		{srv.URL + "/ok.sh", "alias.sh", "reserved"},
 	} {
-		err := r.Add(tc.url, tc.name, false)
+		err := r.Add(tc.url, tc.name, false, false)
 		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 			t.Errorf("Add(%q, %q) error = %v, want %q", tc.url, tc.name, err, tc.wantErr)
 		}
@@ -808,7 +812,7 @@ func TestAddURLEncodedSeparatorCannotTraverse(t *testing.T) {
 	srv, _ := scriptServer(t, map[string]string{"/../../etc": "#!/bin/sh\necho hi\n"})
 	r, _ := newTestRunner(t)
 
-	if err := r.Add(srv.URL+"/..%2F..%2Fetc", "", false); err != nil {
+	if err := r.Add(srv.URL+"/..%2F..%2Fetc", "", false, false); err != nil {
 		t.Fatalf("Add(encoded-separator url): %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(r.Cfg.ScriptsDir, "etc")); err != nil {
@@ -832,10 +836,10 @@ func TestAddURLRejectsDuplicateWithoutFetching(t *testing.T) {
 	})
 	r, _ := newTestRunner(t)
 
-	if err := r.Add(srv.URL+"/v1/tool.sh", "", false); err != nil {
+	if err := r.Add(srv.URL+"/v1/tool.sh", "", false, false); err != nil {
 		t.Fatalf("first Add: %v", err)
 	}
-	err := r.Add(srv.URL+"/v2/tool.sh", "", false)
+	err := r.Add(srv.URL+"/v2/tool.sh", "", false, false)
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("duplicate Add(url) error = %v, want already-exists", err)
 	}
@@ -848,7 +852,7 @@ func TestAddURLRejectsDuplicateWithoutFetching(t *testing.T) {
 		t.Errorf("original script was modified: %q", data)
 	}
 
-	if err := r.Add(srv.URL+"/v2/tool.sh", "", true); err != nil {
+	if err := r.Add(srv.URL+"/v2/tool.sh", "", true, false); err != nil {
 		t.Fatalf("force Add(url): %v", err)
 	}
 	if data, _ := os.ReadFile(dest); !strings.Contains(string(data), "v2") {
@@ -861,14 +865,14 @@ func TestAddURLRejectsCrossExtensionAmbiguity(t *testing.T) {
 	r, _ := newTestRunner(t)
 	src := writeScript(t, t.TempDir(), "tool.sh", "#!/bin/sh\necho sh\n")
 
-	if err := r.Add(src, "", false); err != nil {
+	if err := r.Add(src, "", false, false); err != nil {
 		t.Fatalf("Add tool.sh: %v", err)
 	}
-	err := r.Add(srv.URL+"/tool.py", "", false)
+	err := r.Add(srv.URL+"/tool.py", "", false, false)
 	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("Add(url tool.py) error = %v, want ambiguous", err)
 	}
-	if err := r.Add(srv.URL+"/tool.py", "", true); err != nil {
+	if err := r.Add(srv.URL+"/tool.py", "", true, false); err != nil {
 		t.Fatalf("force Add(url tool.py): %v", err)
 	}
 }
@@ -877,7 +881,7 @@ func TestAddURLEmptyBody(t *testing.T) {
 	srv, _ := scriptServer(t, map[string]string{"/empty.sh": ""})
 	r, _ := newTestRunner(t)
 
-	err := r.Add(srv.URL+"/empty.sh", "", false)
+	err := r.Add(srv.URL+"/empty.sh", "", false, false)
 	if err == nil || !strings.Contains(err.Error(), "empty response") {
 		t.Fatalf("error = %v, want empty-response", err)
 	}
@@ -892,13 +896,13 @@ func TestAddURLSizeCap(t *testing.T) {
 	})
 	r, _ := newTestRunner(t)
 
-	err := r.Add(srv.URL+"/over-cap.sh", "", false)
+	err := r.Add(srv.URL+"/over-cap.sh", "", false, false)
 	if err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Fatalf("over-cap error = %v, want larger-than", err)
 	}
 	assertNoScripts(t, r)
 
-	if err := r.Add(srv.URL+"/at-cap.sh", "", false); err != nil {
+	if err := r.Add(srv.URL+"/at-cap.sh", "", false, false); err != nil {
 		t.Fatalf("at-cap Add: %v", err)
 	}
 	info, err := os.Stat(filepath.Join(r.Cfg.ScriptsDir, "at-cap.sh"))
@@ -916,8 +920,8 @@ func TestAddURLConnectionError(t *testing.T) {
 	srv.Close()
 	r, _ := newTestRunner(t)
 
-	err := r.Add(deadURL, "", false)
-	if err == nil || !strings.Contains(err.Error(), "fetch "+deadURL) {
+	err := r.Add(deadURL, "", false, false)
+	if err == nil || !strings.Contains(err.Error(), "cannot download "+deadURL) {
 		t.Fatalf("error = %v, want fetch error naming the URL", err)
 	}
 	assertNoScripts(t, r)
@@ -931,13 +935,13 @@ func TestAddURLTimeout(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Cleanup(func() { close(release) })
 
-	orig := httpClient
-	httpClient = &http.Client{Timeout: 50 * time.Millisecond}
-	t.Cleanup(func() { httpClient = orig })
+	orig := httpTimeout
+	httpTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { httpTimeout = orig })
 
 	r, _ := newTestRunner(t)
-	err := r.Add(srv.URL+"/slow.sh", "", false)
-	if err == nil || !strings.Contains(err.Error(), "fetch") {
+	err := r.Add(srv.URL+"/slow.sh", "", false, false)
+	if err == nil || err.Error() != "cannot download "+srv.URL+"/slow.sh: timed out" {
 		t.Fatalf("error = %v, want fetch timeout error", err)
 	}
 	assertNoScripts(t, r)
@@ -945,7 +949,7 @@ func TestAddURLTimeout(t *testing.T) {
 
 func TestAddURLInvalidURL(t *testing.T) {
 	r, _ := newTestRunner(t)
-	err := r.Add("https://", "x", false)
+	err := r.Add("https://", "x", false, false)
 	if err == nil || !strings.Contains(err.Error(), "invalid URL") {
 		t.Fatalf("error = %v, want invalid-URL", err)
 	}
@@ -958,7 +962,7 @@ func TestAddLocalPathStillWorks(t *testing.T) {
 	r, out := newTestRunner(t)
 	src := writeScript(t, t.TempDir(), "http-check.sh", "#!/bin/sh\necho ok\n")
 
-	if err := r.Add(src, "", false); err != nil {
+	if err := r.Add(src, "", false, false); err != nil {
 		t.Fatalf("Add(local): %v", err)
 	}
 	if strings.Contains(out.String(), "review it") {
@@ -990,8 +994,8 @@ func TestAddURLInstallFailureKeepsExistingAndLeavesNoTemp(t *testing.T) {
 	}
 	keep := writeScript(t, squat, "keep", "precious")
 
-	err := r.Add(srv.URL+"/tool", "", true)
-	if err == nil || !strings.Contains(err.Error(), "write "+squat) {
+	err := r.Add(srv.URL+"/tool", "", true, false)
+	if err == nil || !strings.Contains(err.Error(), "cannot write "+squat) {
 		t.Fatalf("error = %v, want write error for %s", err, squat)
 	}
 	if data, err := os.ReadFile(keep); err != nil || string(data) != "precious" {
@@ -1016,13 +1020,13 @@ func TestAddLeavesNoTempFiles(t *testing.T) {
 	r, _ := newTestRunner(t)
 	local := writeScript(t, t.TempDir(), "local.sh", "#!/bin/sh\necho local\n")
 
-	if err := r.Add(local, "", false); err != nil {
+	if err := r.Add(local, "", false, false); err != nil {
 		t.Fatalf("Add(local): %v", err)
 	}
-	if err := r.Add(srv.URL+"/remote.sh", "", false); err != nil {
+	if err := r.Add(srv.URL+"/remote.sh", "", false, false); err != nil {
 		t.Fatalf("Add(url): %v", err)
 	}
-	if err := r.Add(local, "", true); err != nil {
+	if err := r.Add(local, "", true, false); err != nil {
 		t.Fatalf("force Add(local): %v", err)
 	}
 
@@ -1042,8 +1046,8 @@ func TestAddLeavesNoTempFiles(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o755 {
-			t.Errorf("%s mode = %v, want 0755", n, info.Mode().Perm())
+		if runtime.GOOS != "windows" && info.Mode().Perm() != config.ScriptMode {
+			t.Errorf("%s mode = %v, want %o", n, info.Mode().Perm(), config.ScriptMode)
 		}
 	}
 }
@@ -1063,7 +1067,10 @@ func TestHelpSync(t *testing.T) {
 	if err := r.Help(""); err != nil {
 		t.Fatalf("Help(): %v", err)
 	}
-	if !strings.Contains(out.String(), "uc sync push") {
-		t.Errorf("overall help = %q, want the sync commands listed", out.String())
+	if !strings.Contains(out.String(), "   sync         Sync scripts") {
+		t.Errorf("overall help = %q, want one line for sync", out.String())
+	}
+	if strings.Contains(out.String(), "uc sync push") {
+		t.Errorf("overall help lists sync verbs; they belong in 'uc help sync'")
 	}
 }

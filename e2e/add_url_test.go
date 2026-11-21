@@ -95,6 +95,7 @@ func TestAddFromURLFollowsRedirect(t *testing.T) {
 func TestAddFromURLFailures(t *testing.T) {
 	env := sandbox(t)
 	stageRemote(t, "failures/empty.sh", "")
+	stageRemote(t, "failures/page.sh", "<!DOCTYPE html>\n<html><body>repo page</body></html>\n")
 
 	for _, tc := range []struct {
 		name    string
@@ -106,8 +107,9 @@ func TestAddFromURLFailures(t *testing.T) {
 		{"empty body", []string{"add", fakeHTTPBase + "/failures/empty.sh"}, "empty response"},
 		{"underivable name", []string{"add", fakeHTTPBase + "/"}, "cannot derive a name"},
 		{"reserved name", []string{"add", fakeHTTPBase + "/failures/list"}, "reserved"},
-		{"traversal name", []string{"add", fakeHTTPBase + "/failures/x.sh", "../evil"}, "invalid script name"},
-		{"connection refused", []string{"add", "http://127.0.0.1:1/tool.sh"}, "fetch"},
+		{"traversal name", []string{"add", fakeHTTPBase + "/failures/x.sh", "../evil"}, "invalid name"},
+		{"connection refused", []string{"add", "http://127.0.0.1:1/tool.sh"}, "cannot download"},
+		{"web page", []string{"add", fakeHTTPBase + "/failures/page.sh"}, "this URL returned a web page, not a script"},
 		{"no host", []string{"add", "https://"}, "invalid URL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -149,12 +151,18 @@ func TestAddFromGistURL(t *testing.T) {
 	// FileServer serves <root>/someone/abc123/raw for GET /someone/abc123/raw.
 	stageRemote(t, "someone/abc123/raw", "#!/bin/sh\necho from gist\n")
 
+	// Plain http to a named host is refused without --insecure: uc can't
+	// know the name resolves to this machine.
+	out, code := runUC(t, env, "add", "http://gist.github.com/someone/abc123", "gisty")
+	assert.Equalf(t, 1, code, "plain-http gist add: output:\n%s", out)
+	assert.Contains(t, out, "refusing to download over plain http", "plain-http gist add")
+
 	// A gist page URL derives the name "raw", which is refused.
-	out, code := runUC(t, env, "add", "http://gist.github.com/someone/abc123")
+	out, code = runUC(t, env, "add", "http://gist.github.com/someone/abc123", "--insecure")
 	assert.Equalf(t, 1, code, "gist add without name: output:\n%s", out)
 	assert.Contains(t, out, "cannot derive a name", "gist add without name")
 
-	out, code = runUC(t, env, "add", "http://gist.github.com/someone/abc123", "gisty")
+	out, code = runUC(t, env, "add", "http://gist.github.com/someone/abc123", "gisty", "--insecure")
 	require.Equalf(t, 0, code, "gist add: output:\n%s", out)
 	assert.Contains(t, out, "added http://gist.github.com/someone/abc123 -> ", "output shows the URL as typed")
 
@@ -172,6 +180,8 @@ func TestHelpAddDescribesURLForm(t *testing.T) {
 	assert.Contains(t, out, "gist", "help add")
 
 	out, code = runUC(t, env, "add")
-	assert.Equalf(t, 1, code, "bare add output:\n%s", out)
-	assert.Contains(t, out, "usage: uc add <path|url> [name] [--force]", "bare add usage")
+	assert.Equalf(t, 2, code, "bare add output:\n%s", out)
+	assert.Contains(t, out, "uc: missing argument", "bare add")
+	assert.Contains(t, out, "usage: uc add <path|url> [<name>] [--force] [--insecure]", "bare add usage")
+	assert.Contains(t, out, "See 'uc help add'.", "bare add")
 }

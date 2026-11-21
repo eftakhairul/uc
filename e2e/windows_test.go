@@ -139,7 +139,7 @@ func TestAliasLifecycle(t *testing.T) {
 	requireBash(t)
 	env := sandbox(t)
 
-	out, code := runUC(t, env, "alias", "add", "gs", "echo", "hi", "--desc", "greet")
+	out, code := runUC(t, env, "alias", "add", "gs", "--desc", "greet", "echo", "hi")
 	require.Equalf(t, 0, code, "alias add: output:\n%s", out)
 
 	// Auto-append: invocation args land on the end of the alias command.

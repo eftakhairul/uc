@@ -10,6 +10,11 @@ import (
 	"os/signal"
 )
 
+// explainExecError reports a failure to start a script.
+func explainExecError(path string, err error) error {
+	return fmt.Errorf("cannot run '%s': %v", path, err)
+}
+
 // exec1 approximates process replacement on Windows, where syscall.Exec is
 // an unsupported stub (always EWINDOWS): spawn the child with inherited
 // stdio and environment, wait for it, and exit with its exit code. The
@@ -49,7 +54,7 @@ func runChild(bin string, argv []string, env []string) (int, error) {
 		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			return exitErr.ExitCode(), nil
 		}
-		return 0, fmt.Errorf("run %s: %w", bin, err)
+		return 0, fmt.Errorf("cannot run %s: %w", bin, err)
 	}
 	return 0, nil
 }

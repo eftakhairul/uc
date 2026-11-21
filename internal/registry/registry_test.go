@@ -8,8 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eftakhairul/uc/internal/aliases"
-	"github.com/eftakhairul/uc/internal/functions"
+	"github.com/eftakhairul/uc/internal/store"
 )
 
 func writeScript(t *testing.T, dir, name, content string) string {
@@ -21,10 +20,29 @@ func writeScript(t *testing.T, dir, name, content string) string {
 	return path
 }
 
-func newTestRegistry(t *testing.T, scriptsDir string) *Registry {
+func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	dir := t.TempDir()
-	return New(scriptsDir, filepath.Join(dir, "aliases.json"), filepath.Join(dir, "functions.json"))
+	return store.New(filepath.Join(dir, "commands.json"), filepath.Join(dir, "aliases.json"), filepath.Join(dir, "functions.json"))
+}
+
+func newTestRegistry(t *testing.T, scriptsDir string) *Registry {
+	t.Helper()
+	return New(scriptsDir, newTestStore(t))
+}
+
+func addAlias(t *testing.T, r *Registry, name, command string) {
+	t.Helper()
+	if err := r.Store.SetAlias(name, store.Alias{Command: command}); err != nil {
+		t.Fatalf("SetAlias: %v", err)
+	}
+}
+
+func addFunction(t *testing.T, r *Registry, name, body string) {
+	t.Helper()
+	if err := r.Store.SetFunction(name, store.Function{Body: body}); err != nil {
+		t.Fatalf("SetFunction: %v", err)
+	}
 }
 
 func TestResolve_ExtensionPriority(t *testing.T) {
@@ -60,7 +78,7 @@ func TestResolve_NotFound(t *testing.T) {
 	dir := t.TempDir()
 	r := newTestRegistry(t, dir)
 	_, err := r.Resolve("nope")
-	if _, ok := err.(*NotFoundError); !ok {
+	if _, ok := errors.AsType[*NotFoundError](err); !ok {
 		t.Fatalf("expected NotFoundError, got %T: %v", err, err)
 	}
 }
@@ -68,12 +86,9 @@ func TestResolve_NotFound(t *testing.T) {
 func TestResolve_FallsThroughToAlias(t *testing.T) {
 	dir := t.TempDir()
 
-	aliasesPath := filepath.Join(dir, "aliases.json")
-	if err := aliases.Add(aliasesPath, "gs", aliases.Alias{Command: "git status"}); err != nil {
-		t.Fatalf("aliases.Add: %v", err)
-	}
+	r := newTestRegistry(t, dir)
+	addAlias(t, r, "gs", "git status")
 
-	r := New(dir, aliasesPath, filepath.Join(dir, "functions.json"))
 	resolved, err := r.Resolve("gs")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -89,15 +104,12 @@ func TestResolve_FallsThroughToAlias(t *testing.T) {
 func TestResolve_AliasDoesNotRequireRegisteredScript(t *testing.T) {
 	dir := t.TempDir()
 
-	aliasesPath := filepath.Join(dir, "aliases.json")
-	if err := aliases.Add(aliasesPath, "gs", aliases.Alias{Command: "git status"}); err != nil {
-		t.Fatalf("aliases.Add: %v", err)
-	}
+	r := newTestRegistry(t, dir)
+	addAlias(t, r, "gs", "git status")
 
 	// No script named "git" or "gs" is registered under ScriptsDir; the
 	// alias must still resolve, since its command is arbitrary shell text,
 	// not a reference to a registered uc script (unlike the old design).
-	r := New(dir, aliasesPath, filepath.Join(dir, "functions.json"))
 	if _, err := r.Resolve("gs"); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -105,12 +117,9 @@ func TestResolve_AliasDoesNotRequireRegisteredScript(t *testing.T) {
 
 func TestResolve_FallsThroughToFunction(t *testing.T) {
 	dir := t.TempDir()
-	functionsPath := filepath.Join(dir, "functions.json")
-	if err := functions.Add(functionsPath, "shiplt", functions.Function{Body: "uc build && uc test"}); err != nil {
-		t.Fatalf("functions.Add: %v", err)
-	}
+	r := newTestRegistry(t, dir)
+	addFunction(t, r, "shiplt", "uc build && uc test")
 
-	r := New(dir, filepath.Join(dir, "aliases.json"), functionsPath)
 	resolved, err := r.Resolve("shiplt")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -127,12 +136,9 @@ func TestResolve_ScriptWinsOverAliasAndFunction(t *testing.T) {
 	dir := t.TempDir()
 	writeScript(t, dir, "dp.sh", "#!/bin/bash\necho script wins\n")
 
-	aliasesPath := filepath.Join(dir, "aliases.json")
-	if err := aliases.Add(aliasesPath, "dp", aliases.Alias{Command: "echo alias"}); err != nil {
-		t.Fatalf("aliases.Add: %v", err)
-	}
+	r := newTestRegistry(t, dir)
+	addAlias(t, r, "dp", "echo alias")
 
-	r := New(dir, aliasesPath, filepath.Join(dir, "functions.json"))
 	resolved, err := r.Resolve("dp")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -184,17 +190,11 @@ func TestList_DedupesShadowedNames(t *testing.T) {
 	scriptsDir := t.TempDir()
 	writeScript(t, scriptsDir, "deploy.sh", "#!/bin/bash\n# @desc: deploy script\n")
 
-	configDir := t.TempDir()
-	aliasesPath := filepath.Join(configDir, "aliases.json")
-	if err := aliases.Add(aliasesPath, "deploy", aliases.Alias{Command: "echo alias"}); err != nil {
-		t.Fatalf("aliases.Add: %v", err)
-	}
-	functionsPath := filepath.Join(configDir, "functions.json")
-	if err := functions.Add(functionsPath, "deploy", functions.Function{Body: "echo hi"}); err != nil {
-		t.Fatalf("functions.Add: %v", err)
-	}
+	// The store allows one kind per name, so the shadowed entry here is an
+	// alias; script precedence must still list the name once.
+	r := newTestRegistry(t, scriptsDir)
+	addAlias(t, r, "deploy", "echo alias")
 
-	r := New(scriptsDir, aliasesPath, functionsPath)
 	items, err := r.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -212,17 +212,10 @@ func TestList_MergesAllThreeKinds(t *testing.T) {
 	writeScript(t, scriptsDir, "zeta.sh", "#!/bin/bash\n# @desc: zeta script\n")
 	writeScript(t, scriptsDir, "alpha.py", "#!/usr/bin/env python3\n# @desc: alpha script\n")
 
-	configDir := t.TempDir()
-	aliasesPath := filepath.Join(configDir, "aliases.json")
-	if err := aliases.Add(aliasesPath, "dp", aliases.Alias{Command: "echo alias"}); err != nil {
-		t.Fatalf("aliases.Add: %v", err)
-	}
-	functionsPath := filepath.Join(configDir, "functions.json")
-	if err := functions.Add(functionsPath, "shiplt", functions.Function{Body: "uc build"}); err != nil {
-		t.Fatalf("functions.Add: %v", err)
-	}
+	r := newTestRegistry(t, scriptsDir)
+	addAlias(t, r, "dp", "echo alias")
+	addFunction(t, r, "shiplt", "uc build")
 
-	r := New(scriptsDir, aliasesPath, functionsPath)
 	items, err := r.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -317,4 +310,123 @@ func TestList_IncludesUnreadableScript(t *testing.T) {
 		}
 	}
 	t.Errorf("List = %v, want the unreadable script to still be listed", items)
+}
+
+// Names that would escape the scripts directory, or name a dotfile, must
+// never resolve (improvement spec §4.1).
+func TestResolveRejectsTraversal(t *testing.T) {
+	root := t.TempDir()
+	scriptsDir := filepath.Join(root, "scripts")
+	if err := os.MkdirAll(scriptsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, root, "victim", "#!/bin/sh\necho outside\n")
+	writeScript(t, scriptsDir, ".hidden", "#!/bin/sh\n")
+	r := newTestRegistry(t, scriptsDir)
+
+	for _, name := range []string{"../victim", "../scripts/../victim", "a/b", `a\b`, "..", ".", "", ".hidden", "x\x00y"} {
+		if res, err := r.Resolve(name); err == nil {
+			t.Errorf("Resolve(%q) = %+v, want not found", name, res)
+		} else if _, ok := errors.AsType[*NotFoundError](err); !ok {
+			t.Errorf("Resolve(%q) err = %T %v, want NotFoundError", name, err, err)
+		}
+		if _, err := r.ResolveScript(name); err == nil {
+			t.Errorf("ResolveScript(%q) resolved, want not found", name)
+		}
+	}
+}
+
+func TestListSkipsDotfilesDirsAndDanglingLinks(t *testing.T) {
+	dir := t.TempDir()
+	writeScript(t, dir, "real.sh", "#!/bin/sh\n")
+	writeScript(t, dir, ".DS_Store", "junk")
+	writeScript(t, dir, ".x.tmp-123", "partial")
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Symlink(filepath.Join(dir, "nowhere"), filepath.Join(dir, "dangling")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(dir, "real.sh"), filepath.Join(dir, "linked")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := newTestRegistry(t, dir).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range items {
+		got = append(got, it.Name)
+	}
+	want := "real"
+	if runtime.GOOS != "windows" {
+		want = "linked,real"
+	}
+	if strings.Join(got, ",") != want {
+		t.Errorf("List names = %v, want %s", got, want)
+	}
+}
+
+func TestMetadataIsCleaned(t *testing.T) {
+	dir := t.TempDir()
+	writeScript(t, dir, "esc.sh", "#!/bin/sh\n# @desc: \x1b[31mRED\x1b[0m\n# @usage: u\x07sage\n# @example: ex\x1bample\n")
+	r := newTestRegistry(t, dir)
+	if err := r.Store.SetAlias("al", store.Alias{Command: "echo \x1b[2J", Desc: "a\x1b]0;title\x07lias"}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := r.Resolve("esc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Desc != "[31mRED[0m" || res.Usage != "usage" || res.Examples[0] != "example" {
+		t.Errorf("script meta not cleaned: %+v", res)
+	}
+	res, err = r.Resolve("al")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Desc != "a]0;titlelias" {
+		t.Errorf("alias desc = %q", res.Desc)
+	}
+	if res.Body != "echo \x1b[2J" {
+		t.Errorf("the body is what runs and must not be altered: %q", res.Body)
+	}
+	items, _ := r.List()
+	for _, it := range items {
+		if strings.ContainsRune(it.Desc, 0x1b) {
+			t.Errorf("List desc for %s still has an escape: %q", it.Name, it.Desc)
+		}
+	}
+}
+
+func TestNotFoundMessage(t *testing.T) {
+	for _, c := range []struct {
+		err  NotFoundError
+		want string
+	}{
+		{NotFoundError{Name: "xyzzy"}, "'xyzzy' is not a uc command or a registered name — see 'uc list'"},
+		{NotFoundError{Name: "kilport", Similar: []string{"killport"}}, "'kilport' is not a uc command or a registered name.\n\nThe most similar name is\n\tkillport"},
+		{NotFoundError{Name: "ad", Similar: []string{"add", "alias"}}, "'ad' is not a uc command or a registered name.\n\nThe most similar names are\n\tadd\n\talias"},
+	} {
+		if got := c.err.Error(); got != c.want {
+			t.Errorf("got %q, want %q", got, c.want)
+		}
+	}
+}
+
+func TestAmbiguousMessageSaysHowToRecover(t *testing.T) {
+	dir := t.TempDir()
+	writeScript(t, dir, "foo.sh", "#!/bin/sh\n")
+	writeScript(t, dir, "foo.py", "#!/usr/bin/env python3\n")
+	_, err := newTestRegistry(t, dir).Resolve("foo")
+	if err == nil || !strings.Contains(err.Error(), "— remove one, for example: uc remove foo.py") {
+		t.Errorf("err = %v", err)
+	}
+	// The full file name resolves, which is what makes that advice work.
+	if _, err := newTestRegistry(t, dir).Resolve("foo.py"); err != nil {
+		t.Errorf("Resolve(foo.py) = %v", err)
+	}
 }

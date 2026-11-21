@@ -74,8 +74,10 @@ $ uc killport 8080
 would kill port 8080
 ```
 
-Sharing a script? `uc add` also takes a URL — a raw file or a gist — and
-downloads it into the registry (up to 1 MB, never run automatically):
+Sharing a script? `uc add` also takes an `https://` URL — a raw file or a
+gist — and downloads it into the registry (up to 1 MB, never run
+automatically). Plain `http://` is refused unless you pass `--insecure`,
+since anyone on the network path could change the script in transit:
 
 ```sh
 $ uc add https://raw.githubusercontent.com/you/dotfiles/main/killport.sh
@@ -100,12 +102,16 @@ always tells you which kind you got.
 
 ## Commands
 
+`uc help` lists every command on one line each, git-style; `uc help
+<command>` (or `uc <command> --help`) shows its full usage and details.
+With nothing registered yet, bare `uc` prints the same overview.
+
 | Command | What it does |
 |---|---|
 | `uc <name> [args...]` | Run a registered script, alias, or function |
 | `uc` *(no args)* | Launch the interactive fuzzy picker |
 | `uc list` / `uc ls` | List scripts + aliases + functions, with kind and description |
-| `uc add <path\|url> [name] [--force]` | Register a script (copies it in, sets +x). An `http(s)://` URL is downloaded instead (gist page URLs fetch via `/raw`). Refuses to overwrite or create an ambiguous name unless `--force` |
+| `uc add <path\|url> [name] [--force] [--insecure]` | Register a script (copies it in, makes it executable). An `https://` URL is downloaded instead (gist page URLs fetch via `/raw`); plain `http://` needs `--insecure`. Refuses to overwrite, shadow an alias/function, or create an ambiguous name unless `--force` |
 | `uc new <name> [--lang sh\|py\|js\|rb\|pl]` | Scaffold a new script in `$EDITOR`, already registered (default lang: `sh`) |
 | `uc remove <name>` / `uc rm` | Unregister a script, alias, or function |
 | `uc which <name>` | Print what a name resolves to, and its kind |
@@ -113,7 +119,8 @@ always tells you which kind you got.
 | `uc completion bash\|zsh\|fish` | Print a shell completion script |
 | `uc history [n]` | Show the last n invocations (default/max: `history_size`), with kind |
 | `uc history run <n>` | Re-run the nth history entry |
-| `uc alias add <name> <command...> [--desc "..."]` | Alias `<name>` to arbitrary shell command text |
+| `uc history clear` | Delete the recorded history |
+| `uc alias add <name> [--desc "..."] [--] <command...>` | Alias `<name>` to arbitrary shell command text (options go before the command) |
 | `uc alias remove <name>` | Delete an alias |
 | `uc alias list` | List aliases only |
 | `uc alias edit <name>` | Edit an alias's command via a temp-file round-trip through `$EDITOR` |
@@ -125,14 +132,33 @@ always tells you which kind you got.
 | `uc sync push` | Publish this machine's scripts, aliases, and functions |
 | `uc sync pull [--force]` | Adopt the remote's state; refuses while you have unpushed changes unless `--force` |
 | `uc sync status` | Show the remote, unpushed local changes, and commits to push/pull |
-| `uc help` | Show usage |
-| `uc help <subcommand\|name>` | Help for a subcommand, or a script/alias/function's `@desc`/`@usage`/`@example` |
+| `uc export [file] [--force]` | Write scripts, aliases, and functions to a `.tar.gz` (`-` = stdout) |
+| `uc import <file> [--force] [--dry-run]` | Merge an archive made by `uc export` (`-` = stdin) |
+| `uc help` / `uc -h` / `uc --help` | Show the command overview |
+| `uc help <command\|name>` | Help for a command, or a script/alias/function's `@desc`/`@usage`/`@example` |
 | `uc <name> --help` / `uc <name> -h` | Shortcut for `uc help <name>`, only when it's the sole argument |
-| `uc version` | Print version |
+| `uc version` / `uc -v` / `uc --version` | Print version |
+
+Mistakes in how a command is called — an unknown option, a missing or extra
+argument, `uc history abc` — print what was wrong, the command's usage, and
+`See 'uc help <command>'`, and exit with status 2. An unknown name exits
+127 and suggests the closest registered names:
+
+```sh
+$ uc kilport
+uc: 'kilport' is not a uc command or a registered name.
+
+The most similar name is
+	killport
+```
 
 Reserved subcommand names (including `alias`/`function` themselves) always
 win over a script/alias/function of the same name, so `uc add`,
 `uc alias add`, and `uc function add` all reject them up front.
+
+Names use letters, digits, `.`, `_` and `-`, start with a letter, digit or
+`_`, and are at most 64 characters. Aliases and functions share one
+namespace: a name can't be both.
 
 ## Writing scripts
 
@@ -181,13 +207,25 @@ needed for shell syntax you want preserved as one alias, e.g.
 `uc alias add ll 'ls -la | less'`. To chain to another `uc` name, write `uc`
 explicitly: `uc alias add dp uc deploy --env=production`.
 
+`uc`'s own options go **before** the command; everything from the first
+command word on belongs to the alias, flags included — the same rule as
+`sudo` or `docker run`:
+
+```sh
+$ uc alias add gs --desc "short status" git status     # description: "short status"
+$ uc alias add mk mytool create --desc "x" --verbose   # mytool's own --desc is kept
+$ uc alias add x -- --weird-binary -v                  # -- before a command starting with '-'
+```
+
 `--desc "..."` sets the description shown in `uc list`, the picker, and
-`uc help <name>` — same role as a script's `@desc` tag.
+`uc help <name>` — same role as a script's `@desc` tag. If `--desc` ends up
+inside the command, `uc` prints a note showing where to move it.
 
 `uc alias edit <name>` (or plain `uc edit <name>`) opens the command text
 in `$EDITOR` via a temp-file round-trip, like `uc function edit` — a
-non-zero editor exit aborts the save. Aliases are stored in
-`$XDG_CONFIG_HOME/uc/aliases.json`.
+non-zero editor exit aborts the save, and saving an empty file changes
+nothing. An alias's command can't be empty. Aliases are stored in
+`$XDG_CONFIG_HOME/uc/commands.json`.
 
 ## Functions
 
@@ -207,8 +245,8 @@ $ uc shiplt
 `uc function edit <name>` opens the body in `$EDITOR` via a temp-file
 round-trip (there's no file to open directly) — a non-zero editor exit
 aborts the save. Functions always run via `bash -c`, regardless of your
-`$EDITOR`/interpreter settings. They're stored in
-`$XDG_CONFIG_HOME/uc/functions.json`.
+`$EDITOR`/interpreter settings. The body is a single argument, so quote it.
+They're stored alongside aliases in `$XDG_CONFIG_HOME/uc/commands.json`.
 
 ## Interactive picker
 
@@ -222,6 +260,12 @@ frecency (how often and how recently you've used each one):
   `<name> ` — most scripts take arguments, so you get a chance to add them
   before it runs.
 - `Enter` again runs it; `Esc`/`Ctrl-c` exits without running anything.
+  The arg line follows shell quoting, so `commit -m "two words"` passes
+  `two words` as one argument.
+
+The picker needs a terminal; without one, `uc` says so and points you at
+`uc list`. With nothing registered yet, `uc` prints the command overview
+instead.
 
 ## Tab completion
 
@@ -239,11 +283,17 @@ or an alias/function's `--desc`. It gets these by calling
 
 Every run (script, alias, or function — not management commands) is
 logged to `$UC_HOME/history.json` — name, args, timestamp, and kind —
-capped at `history_size` entries (25 by default). Because `uc` replaces
+capped at `history_size` entries (25 by default; up to 10000). Because `uc` replaces
 its own process on exec, it can only record what it was about to run, not
 the exit code or duration. `uc history run <n>` re-resolves the name fresh
 at replay time, so an edited alias/function definition is picked up rather
-than replaying a stale snapshot.
+than replaying a stale snapshot. A run that can't start (say, a missing
+interpreter) isn't recorded.
+
+History stores the **arguments** you pass, so a token given on the command
+line (`uc deploy --token=...`) ends up in `history.json` (readable only by
+you). `uc history clear` empties it, and `"history_size": 0` in
+`settings.json` turns history off entirely.
 
 Ranking (for the picker and tab completion) combines frequency and recency
 within that history window, uniformly across all three kinds — frecency
@@ -266,7 +316,7 @@ through a git remote **you** own — there's no hosted backend, just `git` on
 # machine A (has your scripts)
 $ uc sync init git@github.com:you/uc-sync.git
 + scripts/killport
-+ aliases.json
++ commands.json
 pushed initial state to git@github.com:you/uc-sync.git
 
 # machine B (fresh)
@@ -287,19 +337,55 @@ edited the same file, pull stops and asks you to resolve it with git in
 `$UC_HOME/sync`. A plain `uc sync pull` refuses to discard changes you
 haven't pushed; `--force` does so deliberately.
 
+Sync commits work even on a machine with no git identity configured (uc
+falls back to `uc <uc@hostname>`), and commit signing is skipped for them.
+A sync repo created by an older `uc` (with `aliases.json` and
+`functions.json`) is converted to `commands.json` the first time it's used;
+upgrade `uc` on every machine before syncing again.
+
+## Moving to another machine
+
+For a one-off move, a backup, or sharing a set of scripts, use
+`uc export` and `uc import` — no remote needed:
+
+```sh
+$ uc export                         # ./uc-export-<host>-<date>.tar.gz
+exported 12 scripts, 5 aliases, 2 functions to uc-export-laptop-20261116.tar.gz
+uc: note: the archive may contain secrets — treat it like a private key
+
+$ uc import uc-export-laptop-20261116.tar.gz --dry-run   # on the other machine
+$ uc import uc-export-laptop-20261116.tar.gz
+
+$ uc export - | ssh other-machine 'uc import -'          # or straight over ssh
+```
+
+The archive holds `scripts/` and `commands.json` — never `settings.json` or
+`history.json` — and is created readable only by you. Import merges:
+nothing on the receiving machine is deleted, identical entries are skipped,
+and if anything exists there with different content nothing is imported
+unless you pass `--force`. Because an archive may come from someone else,
+it's fully checked before anything is written: only regular files under
+`scripts/` plus `commands.json`, valid names only, and size limits (1 MB per
+file, 1000 entries, 50 MB total).
+
 ## File layout
 
 ```
 $XDG_CONFIG_HOME/uc/
-├── settings.json                   # optional, user-authored config
-├── aliases.json                    # your `uc alias add` entries
-└── functions.json                  # your `uc function add` entries
+├── settings.json                   # optional, user-authored config (per machine)
+└── commands.json                   # your aliases and functions (portable, synced)
 
 ~/.uc/                              # $UC_HOME, overridable via env var
-├── scripts/                        # every registered script, flat
-├── history.json                    # last history_size invocations (25 by default)
+├── scripts/                        # every registered script, flat (portable, synced)
+├── history.json                    # last history_size invocations (per machine)
 └── sync/                           # `uc sync` staging clone of your remote (once set up)
 ```
+
+Upgrading from a version that kept `aliases.json` and `functions.json`?
+They're still read as-is, and the first change you make merges them into
+`commands.json` (the old files are kept as `*.migrated`). New directories
+and scripts are created readable only by you (`700`); to tighten an
+existing install, run `chmod 700 ~/.uc ~/.uc/scripts ~/.config/uc`.
 
 `$UC_HOME` defaults to `~/.uc`. `settings.json` is never created
 automatically — it's only read if you put one there yourself:
@@ -316,7 +402,12 @@ automatically — it's only read if you put one there yourself:
 ```
 
 Unknown keys are ignored, so old config files keep working across
-upgrades. Unset keys fall back to the defaults above.
+upgrades. Unset keys fall back to the defaults above. A broken file — bad
+JSON, a wrong type, an out-of-range value — is reported as a warning and
+the defaults are used, so it can never lock you out of `uc`.
+
+`editor` is split like a shell command line, so a path with spaces can be
+quoted: `"editor": "\"/Applications/My Editor\" --wait"`.
 
 ## Releasing
 
