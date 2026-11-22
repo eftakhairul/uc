@@ -37,7 +37,7 @@ func TestSplit(t *testing.T) {
 }
 
 // Backslashes that don't escape whitespace, a quote, or a backslash are
-// kept, so paths and regexes typed into the picker survive.
+// kept, so Windows paths and regexes in the editor command survive.
 func TestSplitKeepsOtherBackslashes(t *testing.T) {
 	for in, want := range map[string][]string{
 		`grep a\.b`:                 {"grep", `a\.b`},

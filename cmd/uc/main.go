@@ -10,7 +10,6 @@ import (
 	"github.com/eftakhairul/uc/internal/commands"
 	"github.com/eftakhairul/uc/internal/config"
 	"github.com/eftakhairul/uc/internal/help"
-	"github.com/eftakhairul/uc/internal/picker"
 	"github.com/eftakhairul/uc/internal/registry"
 	"github.com/eftakhairul/uc/internal/reserved"
 )
@@ -43,7 +42,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cfg.Store().Warn = io.Discard
 	}
 
-	return report(stderr, dispatch(cfg, r, args))
+	return report(stderr, dispatch(r, args))
 }
 
 // report prints err and returns the exit code: 0 for success, 2 for a
@@ -76,9 +75,18 @@ func isHelpFlag(rest []string) bool {
 	return len(rest) == 1 && (rest[0] == "-h" || rest[0] == "--help")
 }
 
-func dispatch(cfg *config.Config, r *commands.Runner, args []string) error {
+func dispatch(r *commands.Runner, args []string) error {
+	// Bare uc: the help overview when nothing is registered yet, otherwise
+	// the same listing as `uc list`.
 	if len(args) == 0 {
-		return picker.Run(cfg, r)
+		items, err := r.Reg.List()
+		if err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			return r.Help("")
+		}
+		return r.List()
 	}
 	name, rest := args[0], args[1:]
 

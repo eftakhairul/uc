@@ -11,8 +11,8 @@ const wantOverview = `usage: uc <name> [<args>]
        uc <command> [<args>]
        uc [-h | --help] [-v | --version]
 
-Run 'uc' with no arguments to pick a script, alias, or function
-interactively.
+Run 'uc' with no arguments to list your scripts, aliases, and
+functions (or this overview, while nothing is registered).
 
 These are the uc commands:
 

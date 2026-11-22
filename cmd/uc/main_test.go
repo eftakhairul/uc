@@ -234,6 +234,12 @@ func TestNoGoInternalsInErrors(t *testing.T) {
 		t.Errorf("broken commands.json: exit %d, stderr %q", code, stderr)
 	}
 	check(t, []string{"list"}, stderr)
+	// Bare uc reads the same store, so it must fail exactly like uc list —
+	// not fall back to the help overview as if nothing were registered.
+	bareOut, bareErr, bareCode := uc(t)
+	if bareCode != code || bareErr != stderr || bareOut != "" {
+		t.Errorf("bare uc, broken commands.json: exit %d, stdout %q, stderr %q; want uc list's exit %d, stderr %q", bareCode, bareOut, bareErr, code, stderr)
+	}
 
 	// An editor that doesn't exist.
 	t.Setenv("EDITOR", "no-such-editor-xyz")
@@ -284,6 +290,18 @@ func TestHelpFlags(t *testing.T) {
 	// Bare uc with nothing registered shows the same overview.
 	if out, _, code := uc(t); code != 0 || out != overview {
 		t.Errorf("bare uc: exit %d, output %q", code, out)
+	}
+
+	// Once something is registered, bare uc prints exactly what uc list does.
+	if _, errOut, code := uc(t, "alias", "add", "gs", "git", "status"); code != 0 {
+		t.Fatalf("alias add: exit %d, stderr %q", code, errOut)
+	}
+	list, _, code := uc(t, "list")
+	if code != 0 || !strings.Contains(list, "gs") {
+		t.Fatalf("uc list: exit %d, output %q", code, list)
+	}
+	if out, errOut, code := uc(t); code != 0 || out != list || errOut != "" {
+		t.Errorf("bare uc with items: exit %d, stdout %q, stderr %q; want uc list output %q", code, out, errOut, list)
 	}
 
 	helpAlias, _, _ := uc(t, "help", "alias")

@@ -309,14 +309,17 @@ func TestAliasDescStrictRule(t *testing.T) {
 	assert.NotContains(t, out, "note:", "-- means the user was explicit")
 }
 
-// improvement spec §3.5: the picker explains itself without a terminal.
-func TestPickerWithoutTerminal(t *testing.T) {
+// Bare uc with something registered prints exactly what uc list prints.
+func TestBareUCListsRegistered(t *testing.T) {
 	env := sandbox(t)
 	_, code := runUC(t, env, "alias", "add", "gs", "echo", "hi")
 	require.Zero(t, code)
+
+	list, code := runUC(t, env, "list")
+	require.Zero(t, code)
 	out, code := runUC(t, env)
-	assert.Equal(t, 1, code)
-	assert.Equal(t, "uc: the interactive picker needs a terminal — run 'uc list' to see what is registered, or 'uc <name>' to run something\n", out)
+	require.Zerof(t, code, "bare uc: output:\n%s", out)
+	assert.Equal(t, list, out, "bare uc must print exactly uc list")
 }
 
 // improvement spec §5.2: an install from the previous version is read in

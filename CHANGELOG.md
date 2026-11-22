@@ -67,6 +67,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Bare `uc` now prints the same listing as `uc list` instead of opening
+  the interactive picker, which has been removed along with its TUI
+  dependencies (bubbletea, lipgloss). With nothing registered yet it still
+  prints the `uc help` overview. It no longer needs a terminal.
 - `uc help` is now a git-style overview: a usage synopsis, then one line per
   command grouped under headings, with details behind `uc help <command>`.
   Every command's help opens with a `usage:` / `or:` block.

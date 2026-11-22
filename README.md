@@ -104,12 +104,13 @@ always tells you which kind you got.
 
 `uc help` lists every command on one line each, git-style; `uc help
 <command>` (or `uc <command> --help`) shows its full usage and details.
-With nothing registered yet, bare `uc` prints the same overview.
+With nothing registered yet, bare `uc` prints the same overview; after
+that it prints the same listing as `uc list`.
 
 | Command | What it does |
 |---|---|
 | `uc <name> [args...]` | Run a registered script, alias, or function |
-| `uc` *(no args)* | Launch the interactive fuzzy picker |
+| `uc` *(no args)* | Same as `uc list`; prints the `uc help` overview while nothing is registered |
 | `uc list` / `uc ls` | List scripts + aliases + functions, with kind and description |
 | `uc add <path\|url> [name] [--force] [--insecure]` | Register a script (copies it in, makes it executable). An `https://` URL is downloaded instead (gist page URLs fetch via `/raw`); plain `http://` needs `--insecure`. Refuses to overwrite, shadow an alias/function, or create an ambiguous name unless `--force` |
 | `uc new <name> [--lang sh\|py\|js\|rb\|pl]` | Scaffold a new script in `$EDITOR`, already registered (default lang: `sh`) |
@@ -167,7 +168,7 @@ or has one of these extensions: `.sh`, `.py`, `.js`, `.rb`, `.pl`. `uc`
 looks up the right interpreter on `$PATH` at runtime — for `.py` it tries
 `python3` first, then `python`, so Windows and minimal images work too.
 
-Add metadata tags that show up in `uc list`, the picker, and `uc help
+Add metadata tags that show up in `uc list` and `uc help
 <name>`:
 
 ```sh
@@ -217,7 +218,7 @@ $ uc alias add mk mytool create --desc "x" --verbose   # mytool's own --desc is 
 $ uc alias add x -- --weird-binary -v                  # -- before a command starting with '-'
 ```
 
-`--desc "..."` sets the description shown in `uc list`, the picker, and
+`--desc "..."` sets the description shown in `uc list` and
 `uc help <name>` — same role as a script's `@desc` tag. If `--desc` ends up
 inside the command, `uc` prints a note showing where to move it.
 
@@ -248,24 +249,12 @@ aborts the save. Functions always run via `bash -c`, regardless of your
 `$EDITOR`/interpreter settings. The body is a single argument, so quote it.
 They're stored alongside aliases in `$XDG_CONFIG_HOME/uc/commands.json`.
 
-## Interactive picker
+## Bare `uc`
 
-Running `uc` with no arguments opens a fuzzy-filter list of your scripts,
-aliases, and functions together — each tagged with its kind — ranked by
-frecency (how often and how recently you've used each one):
-
-- Type to filter by name or description.
-- `↑`/`↓` or `Ctrl-p`/`Ctrl-n` to move the selection.
-- `Enter` selects and drops you into an editable arg line, pre-filled with
-  `<name> ` — most scripts take arguments, so you get a chance to add them
-  before it runs.
-- `Enter` again runs it; `Esc`/`Ctrl-c` exits without running anything.
-  The arg line follows shell quoting, so `commit -m "two words"` passes
-  `two words` as one argument.
-
-The picker needs a terminal; without one, `uc` says so and points you at
-`uc list`. With nothing registered yet, `uc` prints the command overview
-instead.
+Running `uc` with no arguments prints the same listing as `uc list`: your
+scripts, aliases, and functions together, each tagged with its kind and
+description. With nothing registered yet, it prints the `uc help` overview
+instead, so a fresh install points you at how to get started.
 
 ## Tab completion
 
@@ -295,7 +284,7 @@ line (`uc deploy --token=...`) ends up in `history.json` (readable only by
 you). `uc history clear` empties it, and `"history_size": 0` in
 `settings.json` turns history off entirely.
 
-Ranking (for the picker and tab completion) combines frequency and recency
+Ranking (for tab completion) combines frequency and recency
 within that history window, uniformly across all three kinds — frecency
 is computed on `name` alone, regardless of what it resolves to:
 
@@ -442,7 +431,7 @@ Module boundaries mirror the architecture doc (`uc-ARCHITECTURE.md`):
 `registry` (three-tier name resolution + metadata tags), `aliases` +
 `functions` (their respective JSON stores), `executor` (process
 replacement, including `bash -c` for functions), `history` + `ranker`
-(frecency, uniform across all three kinds), `completion` + `picker` (the
-two autocomplete surfaces), `help` (static + metadata-driven help
+(frecency, uniform across all three kinds), `completion` (shell tab
+completion), `help` (static + metadata-driven help
 rendering), and `commands` (thin CLI handlers), all wired together by
 `cmd/uc`.

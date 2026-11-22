@@ -9,7 +9,7 @@ aliases, and shell functions. Register something once, then run it from anywhere
 2. [Scripts](#scripts)
 3. [Aliases](#aliases)
 4. [Functions](#functions)
-5. [The Interactive Picker](#the-interactive-picker)
+5. [Running uc With No Arguments](#running-uc-with-no-arguments)
 6. [Tab Completion](#tab-completion)
 7. [History](#history)
 8. [Listing and Inspecting](#listing-and-inspecting)
@@ -177,7 +177,7 @@ Add these comments in the first 25 lines of a script:
 # @example: killport 3000 --force
 ```
 
-These populate `uc list`, the interactive picker, and `uc help killport`.
+These populate `uc list` and `uc help killport`.
 
 ## Aliases
 
@@ -281,21 +281,15 @@ uc greet Alice
 # Hello, Alice
 ```
 
-## The Interactive Picker
-
-Run `uc` with no arguments to open a fuzzy list of all registered names:
+## Running uc With No Arguments
 
 ```sh
 uc
 ```
 
-- Type to filter by name or description.
-- Use `↑`/`↓` or `Ctrl-p`/`Ctrl-n` to move.
-- Press `Enter` to select; you get an editable arg line pre-filled with the name.
-- Press `Enter` again to run, or `Esc`/`Ctrl-c` to cancel.
-
-Names are ranked by **frecency** — a combination of how often and how recently
-they were used.
+Bare `uc` prints the same listing as `uc list` — every registered script,
+alias, and function with its kind and description. With nothing registered
+yet, it prints the `uc help` overview instead.
 
 ## Tab Completion
 
@@ -588,7 +582,7 @@ Imported scripts get `uc`'s own file mode, never the one in the archive.
 
 `uc help` (also `uc -h` or `uc --help`) prints a one-screen overview: one
 line per command, grouped by what you use them for. With nothing registered
-yet, bare `uc` prints the same overview.
+yet, bare `uc` prints the same overview; otherwise it prints `uc list`.
 
 ```sh
 uc help alias        # full usage and details for one command
