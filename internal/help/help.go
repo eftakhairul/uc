@@ -61,8 +61,8 @@ $UC_HOME/scripts/ before the editor opens, so saving it is what registers
 it — there's no separate 'uc add' step.
 
 The scaffold is pre-filled with a shebang for the chosen language (default:
-sh) and an empty '@desc/@usage/@example' metadata block, which 'uc list',
-the picker, and 'uc help <name>' read back.
+sh) and an empty '@desc/@usage/@example' metadata block, which 'uc list'
+and 'uc help <name>' read back.
 
 Quitting the editor without changing the template registers nothing, and a
 non-zero editor exit leaves nothing behind either. Use 'uc edit <name>' to
@@ -124,7 +124,7 @@ Options go before the command:
 'uc alias add gs --desc "short status" git status'. Everything from the
 first command word on is the alias, including any flags. Use '--' before a
 command that starts with a dash. --desc sets the description shown in
-'uc list' and the picker.
+'uc list'.
 
 'uc alias list' shows aliases only. 'uc alias edit' opens the command text
 in $EDITOR.
@@ -140,7 +140,7 @@ chaining multiple 'uc' commands together, e.g.
 your args are available inside it as $1, $2, and $@.
 
 'uc function list' shows functions only. 'uc function edit' opens the body
-in $EDITOR. --desc sets the description shown in 'uc list' and the picker.
+in $EDITOR. --desc sets the description shown in 'uc list'.
 `,
 	"sync": `usage: uc sync init <remote-url>
    or: uc sync push

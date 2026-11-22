@@ -1,7 +1,6 @@
 // Package shellsplit splits a command line into words the way a POSIX shell
 // would for quoting purposes — single quotes, double quotes, and backslash
-// escapes — without any expansion. Used for the picker's argument line and
-// the editor command.
+// escapes — without any expansion. Used to split the editor command.
 //
 // Backslash handling is deliberately narrower than a shell's, so paths and
 // regexes typed with backslashes survive: outside quotes a backslash only

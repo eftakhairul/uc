@@ -91,6 +91,28 @@ func TestVersion(t *testing.T) {
 	assert.NotEmpty(t, strings.TrimSpace(out), "version output")
 }
 
+// Bare uc: the help overview while nothing is registered, then exactly
+// what uc list prints. Registering an alias only writes JSON, so this
+// needs no bash.
+func TestBareUC(t *testing.T) {
+	env := sandbox(t)
+
+	help, code := runUC(t, env, "help")
+	require.Zero(t, code, "help")
+	out, code := runUC(t, env)
+	require.Zerof(t, code, "bare uc, empty: output:\n%s", out)
+	assert.Equal(t, help, out, "bare uc with nothing registered must print uc help")
+
+	out, code = runUC(t, env, "alias", "add", "gs", "git", "status")
+	require.Zerof(t, code, "alias add: output:\n%s", out)
+
+	list, code := runUC(t, env, "list")
+	require.Zero(t, code, "list")
+	out, code = runUC(t, env)
+	require.Zerof(t, code, "bare uc: output:\n%s", out)
+	assert.Equal(t, list, out, "bare uc must print exactly uc list")
+}
+
 func TestScriptLifecycle(t *testing.T) {
 	requireBash(t)
 	env := sandbox(t)

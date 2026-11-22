@@ -46,8 +46,8 @@ const overviewUsage = `usage: uc <name> [<args>]
        uc <command> [<args>]
        uc [-h | --help] [-v | --version]`
 
-const overviewIntro = `Run 'uc' with no arguments to pick a script, alias, or function
-interactively.
+const overviewIntro = `Run 'uc' with no arguments to list your scripts, aliases, and
+functions (or this overview, while nothing is registered).
 
 These are the uc commands:`
 
@@ -55,7 +55,7 @@ const overviewFooter = `See 'uc help <command>' to read about a specific command
 'uc help <name>' for a script, alias, or function you registered.`
 
 // Overview returns the text printed by `uc help`, `uc -h`, and bare `uc`
-// when nothing is registered.
+// when nothing is registered (bare `uc` otherwise prints `uc list`).
 func Overview() string {
 	width := 0
 	for _, g := range groups {
